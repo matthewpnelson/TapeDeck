@@ -1,0 +1,46 @@
+# Development Dockerfile with Air hot reload
+FROM golang:1.25-alpine
+
+# Install build dependencies and tools
+RUN apk add --no-cache git ca-certificates tzdata su-exec
+
+# Install Air for hot reload
+RUN go install github.com/air-verse/air@latest
+
+# Install templ
+RUN go install github.com/a-h/templ/cmd/templ@latest
+
+WORKDIR /app
+
+# Copy go mod files for dependency caching
+COPY go.mod go.sum* ./
+RUN go mod download
+
+# Note: Source code is mounted as volume, not copied
+# This allows live editing without rebuilding the container
+
+# Create data directory
+RUN mkdir -p /data
+
+# Create tmp directory for Air builds
+RUN mkdir -p /tmp
+
+# Expose ports
+# 3001: App server
+# 3002: Air proxy with auto-refresh
+EXPOSE 3001 3002
+
+# Environment variables for user/group ID
+ENV PUID=1000 \
+    PGID=1000
+
+# Copy entrypoint script
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+# Health check (check main app port)
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+  CMD wget --no-verbose --tries=1 --spider http://localhost:3001/health || exit 1
+
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["air", "-c", ".air.toml"]
