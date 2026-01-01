@@ -37,10 +37,17 @@ templ librariesContent(servers []ServerInfo, selectedServer ServerInfo, librarie
 		</form>
 		<div class="library-grid">
 			for _, lib := range libraries {
-				<a href={ templ.SafeURL("/libraries/" + lib.Key + "?server_id=" + selectedServer.ID) } class="library-card">
-					<div class="library-title">{ lib.Title }</div>
-					<div class="library-type">{ lib.Type }</div>
-				</a>
+				if lib.Key == "livetv" {
+					<a href={ templ.SafeURL("/livetv?server_id=" + selectedServer.ID) } class="library-card">
+						<div class="library-title">{ lib.Title }</div>
+						<div class="library-type">{ lib.Type }</div>
+					</a>
+				} else {
+					<a href={ templ.SafeURL("/libraries/" + lib.Key + "?server_id=" + selectedServer.ID) } class="library-card">
+						<div class="library-title">{ lib.Title }</div>
+						<div class="library-type">{ lib.Type }</div>
+					</a>
+				}
 			}
 		</div>
 	</div>

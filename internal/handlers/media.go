@@ -20,6 +20,9 @@ type PlexClientInterface interface {
 	GetLibraryContents(ctx context.Context, libraryKey string) ([]plex.MediaItem, error)
 	Search(ctx context.Context, query string) ([]plex.MediaItem, error)
 	GetMetadata(ctx context.Context, ratingKey string) (*plex.MediaMetadata, error)
+	GetAllLiveTVChannels(ctx context.Context) ([]plex.MediaItem, error)
+	GetPlaylists(ctx context.Context) ([]plex.Playlist, error)
+	GetNextUnwatchedEpisode(ctx context.Context, showRatingKey string) (*plex.MediaMetadata, error)
 }
 
 // PlexClientFactory creates a new Plex client
@@ -132,6 +135,14 @@ func (h *MediaHandler) Libraries(w http.ResponseWriter, r *http.Request) {
 		RespondError(w, r, "Failed to get libraries", http.StatusInternalServerError)
 		return
 	}
+
+	// Add a pseudo-library for Live TV at the beginning of the list
+	liveTVLibrary := plex.Library{
+		Key:   "livetv", // Special key that routes to /livetv instead of /libraries/{key}
+		Type:  "livetv",
+		Title: "📺 Live TV",
+	}
+	libraries = append([]plex.Library{liveTVLibrary}, libraries...)
 
 	// Convert ServerInfo to pages.ServerInfo
 	var pageServers []pages.ServerInfo
@@ -358,6 +369,202 @@ func (h *MediaHandler) Search(w http.ResponseWriter, r *http.Request) {
 
 	// Render using templ template
 	if err := pages.MediaSearchResults(query, items, NavigationHTML(), ConnectionBannerHTML(), ConnectionBannerScript()).Render(ctx, w); err != nil {
+		log.Error("Failed to render template", "error", err)
+		RespondError(w, r, "Failed to render page", http.StatusInternalServerError)
+	}
+}
+
+// LiveTVChannels handles GET /livetv
+func (h *MediaHandler) LiveTVChannels(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	log := middleware.GetLogger(ctx)
+
+	// Get user from context
+	userID, ok := middleware.GetUserIDFromContext(ctx)
+	if !ok {
+		RespondError(w, r, "Not authenticated", http.StatusUnauthorized)
+		return
+	}
+
+	// Get user from database to retrieve auth token
+	user, err := h.db.GetUserByID(ctx, userID)
+	if err != nil {
+		log.Error("Failed to get user", "error", err)
+		RespondError(w, r, "Failed to get user", http.StatusInternalServerError)
+		return
+	}
+
+	// Get selected server from query param, default to first server
+	selectedServerID := r.URL.Query().Get("server_id")
+	var selectedServer ServerInfo
+	if selectedServerID == "" && len(h.servers) > 0 {
+		selectedServer = h.servers[0]
+	} else {
+		// Find the requested server
+		found := false
+		for _, srv := range h.servers {
+			if srv.ID == selectedServerID {
+				selectedServer = srv
+				found = true
+				break
+			}
+		}
+		if !found {
+			if len(h.servers) > 0 {
+				selectedServer = h.servers[0]
+			} else {
+				RespondError(w, r, "No Plex servers configured", http.StatusInternalServerError)
+				return
+			}
+		}
+	}
+
+	// Try all URLs for this server until one works
+	var channels []plex.MediaItem
+	var lastErr error
+	var successfulURL string
+
+	for _, url := range selectedServer.URLs {
+		plexClient := h.newPlexClient(url, selectedServer.ID, user.PlexAuthToken, h.devMode)
+
+		// Add timeout for external API call
+		apiCtx, cancel := context.WithTimeout(ctx, constants.PlexAPITimeout)
+		channels, lastErr = plexClient.GetAllLiveTVChannels(apiCtx)
+		cancel()
+
+		if lastErr == nil {
+			// Success! Use these results
+			successfulURL = url
+			break
+		}
+		// Try next URL
+	}
+
+	if lastErr != nil {
+		// Check if token was revoked (401 Unauthorized)
+		if handlePlexUnauthorized(w, r, lastErr, h.sessionStore) {
+			return
+		}
+		if errors.Is(lastErr, context.DeadlineExceeded) {
+			log.Warn("Plex API call timed out", "server", selectedServer.Name)
+			RespondError(w, r, "Plex server timed out", http.StatusGatewayTimeout)
+			return
+		}
+		log.Error("Failed to get Live TV channels from server", "server", selectedServer.Name, "urls_tried", len(selectedServer.URLs), "error", lastErr)
+		RespondError(w, r, "Failed to get Live TV channels. Make sure Live TV & DVR is configured in Plex.", http.StatusInternalServerError)
+		return
+	}
+
+	log.Info("Retrieved Live TV channels", "server", selectedServer.Name, "channel_count", len(channels))
+
+	// Build full thumbnail URLs
+	for i := range channels {
+		if channels[i].Thumb != "" {
+			channels[i].Thumb = successfulURL + channels[i].Thumb + "?X-Plex-Token=" + user.PlexAuthToken
+		}
+	}
+
+	// Render using templ template
+	if err := pages.MediaLiveTVChannels(channels, selectedServer.ID, NavigationHTML(), ConnectionBannerHTML(), ConnectionBannerScript()).Render(ctx, w); err != nil {
+		log.Error("Failed to render template", "error", err)
+		RespondError(w, r, "Failed to render page", http.StatusInternalServerError)
+	}
+}
+
+// Playlists handles GET /playlists
+func (h *MediaHandler) Playlists(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	log := middleware.GetLogger(ctx)
+
+	// Get user from context
+	userID, ok := middleware.GetUserIDFromContext(ctx)
+	if !ok {
+		RespondError(w, r, "Not authenticated", http.StatusUnauthorized)
+		return
+	}
+
+	// Get user from database to retrieve auth token
+	user, err := h.db.GetUserByID(ctx, userID)
+	if err != nil {
+		log.Error("Failed to get user", "error", err)
+		RespondError(w, r, "Failed to get user", http.StatusInternalServerError)
+		return
+	}
+
+	// Get selected server from query param, default to first server
+	selectedServerID := r.URL.Query().Get("server_id")
+	var selectedServer ServerInfo
+	if selectedServerID == "" && len(h.servers) > 0 {
+		selectedServer = h.servers[0]
+	} else {
+		// Find the requested server
+		found := false
+		for _, srv := range h.servers {
+			if srv.ID == selectedServerID {
+				selectedServer = srv
+				found = true
+				break
+			}
+		}
+		if !found {
+			if len(h.servers) > 0 {
+				selectedServer = h.servers[0]
+			} else {
+				RespondError(w, r, "No Plex servers configured", http.StatusInternalServerError)
+				return
+			}
+		}
+	}
+
+	// Try all URLs for this server until one works
+	var playlists []plex.Playlist
+	var lastErr error
+	var successfulURL string
+
+	for _, url := range selectedServer.URLs {
+		plexClient := h.newPlexClient(url, selectedServer.ID, user.PlexAuthToken, h.devMode)
+
+		// Add timeout for external API call
+		apiCtx, cancel := context.WithTimeout(ctx, constants.PlexAPITimeout)
+		playlists, lastErr = plexClient.GetPlaylists(apiCtx)
+		cancel()
+
+		if lastErr == nil {
+			// Success! Use these results
+			successfulURL = url
+			break
+		}
+		// Try next URL
+	}
+
+	if lastErr != nil {
+		// Check if token was revoked (401 Unauthorized)
+		if handlePlexUnauthorized(w, r, lastErr, h.sessionStore) {
+			return
+		}
+		if errors.Is(lastErr, context.DeadlineExceeded) {
+			log.Warn("Plex API call timed out", "server", selectedServer.Name)
+			RespondError(w, r, "Plex server timed out", http.StatusGatewayTimeout)
+			return
+		}
+		log.Error("Failed to get playlists from server", "server", selectedServer.Name, "urls_tried", len(selectedServer.URLs), "error", lastErr)
+		RespondError(w, r, "Failed to get playlists", http.StatusInternalServerError)
+		return
+	}
+
+	log.Info("Retrieved playlists", "server", selectedServer.Name, "playlist_count", len(playlists))
+
+	// Build full thumbnail URLs (use composite thumb if regular thumb not available)
+	for i := range playlists {
+		if playlists[i].Thumb != "" {
+			playlists[i].Thumb = successfulURL + playlists[i].Thumb + "?X-Plex-Token=" + user.PlexAuthToken
+		} else if playlists[i].CompositeThumb != "" {
+			playlists[i].Thumb = successfulURL + playlists[i].CompositeThumb + "?X-Plex-Token=" + user.PlexAuthToken
+		}
+	}
+
+	// Render using templ template
+	if err := pages.MediaPlaylists(playlists, selectedServer.ID, NavigationHTML(), ConnectionBannerHTML(), ConnectionBannerScript()).Render(ctx, w); err != nil {
 		log.Error("Failed to render template", "error", err)
 		RespondError(w, r, "Failed to render page", http.StatusInternalServerError)
 	}

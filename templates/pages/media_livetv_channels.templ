@@ -1,0 +1,86 @@
+package pages
+
+import "github.com/Chuntttttt/tapedeck/templates/layouts"
+import "github.com/Chuntttttt/tapedeck/internal/plex"
+import "fmt"
+
+// MediaLiveTVChannels renders the Live TV channels page
+templ MediaLiveTVChannels(channels []plex.MediaItem, serverID string, navHTML string, bannerHTML string, bannerScript string) {
+	@layouts.AppLayout("Live TV", navHTML, bannerHTML, bannerScript, liveTVChannelsContent(channels, serverID))
+}
+
+templ liveTVChannelsContent(channels []plex.MediaItem, serverID string) {
+	<div class="app-page">
+		<div class="header">
+			<h1>📺 Live TV Channels</h1>
+		</div>
+		<div class="search-filter" style="margin-bottom: 20px;">
+			<input
+				type="text"
+				id="channel-filter"
+				placeholder="Filter channels..."
+				style="padding: 10px; width: 300px; font-size: 16px; border: 1px solid #ddd; border-radius: 4px;"
+				oninput="filterChannels(this.value)"
+			/>
+			<span id="filter-count" style="margin-left: 10px; color: #666;"></span>
+		</div>
+		<div class="card-grid" id="channel-items">
+			for _, channel := range channels {
+				<a href={ templ.SafeURL(fmt.Sprintf("/media/%s/%s", serverID, channel.RatingKey)) } class="card-item" data-title={ channel.Title }>
+					if channel.Thumb != "" {
+						<div class="card-poster" style={ fmt.Sprintf("background-image: url(%s)", channel.Thumb) }></div>
+					} else {
+						<div class="card-poster card-poster-placeholder">
+							<div class="placeholder-icon">📺</div>
+						</div>
+					}
+					<div class="card-overlay">
+						<div class="card-title">{ channel.Title }</div>
+					</div>
+				</a>
+			}
+		</div>
+		if len(channels) == 0 {
+			<div style="text-align: center; padding: 40px; color: #666;">
+				<p>No Live TV channels found.</p>
+				<p style="font-size: 14px;">Make sure your Plex server has Live TV & DVR configured.</p>
+			</div>
+		}
+	</div>
+	<script>
+		// Update count display on page load
+		document.addEventListener('DOMContentLoaded', function() {
+			updateFilterCount();
+		});
+
+		function filterChannels(query) {
+			const items = document.querySelectorAll('.card-item');
+			const searchTerm = query.toLowerCase().trim();
+
+			items.forEach(item => {
+				const title = item.getAttribute('data-title').toLowerCase();
+				if (searchTerm === '' || title.includes(searchTerm)) {
+					item.style.display = '';
+				} else {
+					item.style.display = 'none';
+				}
+			});
+
+			updateFilterCount();
+		}
+
+		function updateFilterCount() {
+			const items = document.querySelectorAll('.card-item');
+			const visibleItems = Array.from(items).filter(item => item.style.display !== 'none');
+			const countEl = document.getElementById('filter-count');
+
+			if (items.length === 0) {
+				countEl.textContent = '';
+			} else if (visibleItems.length === items.length) {
+				countEl.textContent = `${items.length} channels`;
+			} else {
+				countEl.textContent = `${visibleItems.length} of ${items.length} channels`;
+			}
+		}
+	</script>
+}

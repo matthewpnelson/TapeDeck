@@ -1,0 +1,93 @@
+package pages
+
+import "github.com/Chuntttttt/tapedeck/templates/layouts"
+import "github.com/Chuntttttt/tapedeck/internal/plex"
+import "fmt"
+
+// MediaPlaylists renders the playlists page
+templ MediaPlaylists(playlists []plex.Playlist, serverID string, navHTML string, bannerHTML string, bannerScript string) {
+	@layouts.AppLayout("Playlists", navHTML, bannerHTML, bannerScript, playlistsContent(playlists, serverID))
+}
+
+templ playlistsContent(playlists []plex.Playlist, serverID string) {
+	<div class="app-page">
+		<div class="header">
+			<h1>🎵 Playlists</h1>
+		</div>
+		<div class="search-filter" style="margin-bottom: 20px;">
+			<input
+				type="text"
+				id="playlist-filter"
+				placeholder="Filter playlists..."
+				style="padding: 10px; width: 300px; font-size: 16px; border: 1px solid #ddd; border-radius: 4px;"
+				oninput="filterPlaylists(this.value)"
+			/>
+			<span id="filter-count" style="margin-left: 10px; color: #666;"></span>
+		</div>
+		<div class="card-grid" id="playlist-items">
+			for _, playlist := range playlists {
+				<a href={ templ.SafeURL(fmt.Sprintf("/media/%s/playlist/%s", serverID, playlist.RatingKey)) } class="card-item" data-title={ playlist.Title } data-smart={ fmt.Sprintf("%t", playlist.Smart) }>
+					if playlist.Thumb != "" {
+						<div class="card-poster" style={ fmt.Sprintf("background-image: url(%s)", playlist.Thumb) }></div>
+					} else {
+						<div class="card-poster card-poster-placeholder">
+							if playlist.PlaylistType == "audio" {
+								<div class="placeholder-icon">🎵</div>
+							} else {
+								<div class="placeholder-icon">🎬</div>
+							}
+						</div>
+					}
+					<div class="card-overlay">
+						<div class="card-title">
+							{ playlist.Title }
+							if playlist.Smart {
+								<span style="margin-left: 5px; font-size: 0.8em; color: #4CAF50;" title="Smart Playlist (Auto-shuffles)">⚡</span>
+							}
+						</div>
+						<div class="card-year">
+							{ fmt.Sprintf("%d items", playlist.LeafCount) }
+							if playlist.PlaylistType != "" {
+								<span style="margin-left: 8px;">• { playlist.PlaylistType }</span>
+							}
+						</div>
+					</div>
+				</a>
+			}
+		</div>
+	</div>
+	<script>
+		// Update count display on page load
+		document.addEventListener('DOMContentLoaded', function() {
+			updateFilterCount();
+		});
+
+		function filterPlaylists(query) {
+			const items = document.querySelectorAll('.card-item');
+			const searchTerm = query.toLowerCase().trim();
+
+			items.forEach(item => {
+				const title = item.getAttribute('data-title').toLowerCase();
+				if (searchTerm === '' || title.includes(searchTerm)) {
+					item.style.display = '';
+				} else {
+					item.style.display = 'none';
+				}
+			});
+
+			updateFilterCount();
+		}
+
+		function updateFilterCount() {
+			const items = document.querySelectorAll('.card-item');
+			const visibleItems = Array.from(items).filter(item => item.style.display !== 'none');
+			const countEl = document.getElementById('filter-count');
+
+			if (visibleItems.length === items.length) {
+				countEl.textContent = `${items.length} playlists`;
+			} else {
+				countEl.textContent = `${visibleItems.length} of ${items.length} playlists`;
+			}
+		}
+	</script>
+}

@@ -88,6 +88,7 @@ func (h *MediaDetailHandler) Detail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Fetch metadata
+	log.Info("Fetching metadata from Plex", "server_id", serverID, "rating_key", ratingKey, "server_url", serverURL)
 	plexClient := h.newPlexClient(serverURL, serverID, user.PlexAuthToken, h.devMode)
 	apiCtx, cancel := context.WithTimeout(ctx, constants.PlexAPITimeout)
 	metadata, err := plexClient.GetMetadata(apiCtx, ratingKey)
@@ -98,6 +99,7 @@ func (h *MediaDetailHandler) Detail(w http.ResponseWriter, r *http.Request) {
 		RespondError(w, r, "Media not found", http.StatusNotFound)
 		return
 	}
+	log.Info("Successfully fetched metadata", "title", metadata.Title, "type", metadata.Type)
 
 	// Build full thumbnail URL
 	var thumbnailURL string

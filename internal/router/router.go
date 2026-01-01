@@ -23,6 +23,7 @@ type Dependencies struct {
 	GetPlaybackHandler    func() *handlers.PlaybackHandler
 	GetPlayHandler        func() *handlers.PlayHandler
 	GetStatusHandler      func() *handlers.StatusHandler
+	GetWebhookHandler     func() *handlers.WebhookHandler
 
 	AuthMiddleware func(http.Handler) http.Handler
 	HandlersReady  func() bool
@@ -76,6 +77,15 @@ func New(deps *Dependencies) *chi.Mux {
 		r.Get("/libraries/{libraryKey}", func(w http.ResponseWriter, req *http.Request) {
 			deps.GetMediaHandler().LibraryContents(w, req)
 		})
+		r.Get("/search", func(w http.ResponseWriter, req *http.Request) {
+			deps.GetMediaHandler().Search(w, req)
+		})
+		r.Get("/livetv", func(w http.ResponseWriter, req *http.Request) {
+			deps.GetMediaHandler().LiveTVChannels(w, req)
+		})
+		r.Get("/playlists", func(w http.ResponseWriter, req *http.Request) {
+			deps.GetMediaHandler().Playlists(w, req)
+		})
 		r.Get("/media/{serverID}/{ratingKey}", func(w http.ResponseWriter, req *http.Request) {
 			deps.GetMediaDetailHandler().Detail(w, req)
 		})
@@ -120,6 +130,14 @@ func New(deps *Dependencies) *chi.Mux {
 		})
 		r.Get("/api/status/ha", func(w http.ResponseWriter, req *http.Request) {
 			deps.GetStatusHandler().HAStatus(w, req)
+		})
+	})
+
+	// Webhook endpoint for NFC reader (unprotected, requires initialized handlers, validated via webhook secret)
+	r.Group(func(r chi.Router) {
+		r.Use(requireInitialized(deps.HandlersReady))
+		r.Post("/api/webhook/nfc", func(w http.ResponseWriter, req *http.Request) {
+			deps.GetWebhookHandler().HandleNFCWebhook(w, req)
 		})
 	})
 

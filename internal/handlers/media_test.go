@@ -369,39 +369,3 @@ func TestMediaHandler_Search_EmptyQuery(t *testing.T) {
 		t.Error("Response body is empty")
 	}
 }
-
-// Mock Plex client for testing
-type mockPlexClient struct {
-	getLibrariesFunc       func(context.Context) ([]plex.Library, error)
-	getLibraryContentsFunc func(context.Context, string) ([]plex.MediaItem, error)
-	searchFunc             func(context.Context, string) ([]plex.MediaItem, error)
-	getMetadataFunc        func(context.Context, string) (*plex.MediaMetadata, error)
-}
-
-func (m *mockPlexClient) GetLibraries(ctx context.Context) ([]plex.Library, error) {
-	if m.getLibrariesFunc != nil {
-		return m.getLibrariesFunc(ctx)
-	}
-	return nil, nil
-}
-
-func (m *mockPlexClient) GetLibraryContents(ctx context.Context, libraryKey string) ([]plex.MediaItem, error) {
-	if m.getLibraryContentsFunc != nil {
-		return m.getLibraryContentsFunc(ctx, libraryKey)
-	}
-	return nil, nil
-}
-
-func (m *mockPlexClient) Search(ctx context.Context, query string) ([]plex.MediaItem, error) {
-	if m.searchFunc != nil {
-		return m.searchFunc(ctx, query)
-	}
-	return nil, nil
-}
-
-func (m *mockPlexClient) GetMetadata(ctx context.Context, ratingKey string) (*plex.MediaMetadata, error) {
-	if m.getMetadataFunc != nil {
-		return m.getMetadataFunc(ctx, ratingKey)
-	}
-	return nil, nil
-}
