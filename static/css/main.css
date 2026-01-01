@@ -927,6 +927,32 @@ input[type="url"]::placeholder {
     margin: 0;
 }
 
+/* Delete Button */
+.delete-btn {
+    background: rgba(239, 68, 68, 0.9);
+    border: none;
+    border-radius: 4px;
+    padding: 8px 10px;
+    font-size: 16px;
+    cursor: pointer;
+    transition: background 0.2s, transform 0.1s;
+    color: white;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.delete-btn:hover {
+    background: rgba(220, 38, 38, 1);
+    transform: scale(1.1);
+}
+
+.delete-btn:active {
+    transform: scale(0.95);
+}
+
+.delete-form {
+    display: inline;
+}
+
 /* Responsive */
 @media (max-width: 768px) {
     .media-detail-container {

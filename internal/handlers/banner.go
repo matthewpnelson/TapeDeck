@@ -65,6 +65,7 @@ func NavigationHTML() string {
                 <a href="/mappings" style="font-size: 18px;">🎬 TapeDeck</a>
                 <a href="/mappings">Mappings</a>
                 <a href="/libraries">Libraries</a>
+                <a href="/playlists">Playlists</a>
             </div>
             <div class="nav-right">
                 <a href="/settings">⚙️ Settings</a>

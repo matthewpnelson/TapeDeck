@@ -324,6 +324,7 @@ docker-compose logs -f tapedeck
 - Complete hardware setup guide ([docs/hardware-setup.md](docs/hardware-setup.md))
 - Home Assistant integration guide ([docs/home-assistant-setup.md](docs/home-assistant-setup.md))
 - ESPHome configuration examples for RC522 and PN532 readers
+- Known limitations ([docs/known-limitations.md](docs/known-limitations.md))
 
 ## Future Enhancements
 
