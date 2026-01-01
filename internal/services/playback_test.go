@@ -79,10 +79,14 @@ func (m *mockHARestClient) PlayMedia(ctx context.Context, entityID, contentType,
 	return m.playMediaErr
 }
 
+func (m *mockHARestClient) MediaStop(_ context.Context, _ string) error {
+	return nil
+}
+
 func TestPlayByTagID_Success(t *testing.T) {
 	db := &mockDB{}
 	haRest := &mockHARestClient{entityState: "idle"}
-	service := NewPlaybackService(db, haRest)
+	service := NewPlaybackService(db, haRest, nil)
 
 	result, err := service.PlayByTagID(context.Background(), "test-tag-123")
 
@@ -102,7 +106,7 @@ func TestPlayByTagID_MappingNotFound(t *testing.T) {
 		getCardMappingErr: errors.New("card mapping not found"),
 	}
 	haRest := &mockHARestClient{}
-	service := NewPlaybackService(db, haRest)
+	service := NewPlaybackService(db, haRest, nil)
 
 	result, err := service.PlayByTagID(context.Background(), "unknown-tag")
 
@@ -117,7 +121,7 @@ func TestPlayByTagID_MappingNotFound(t *testing.T) {
 func TestPlay_DeviceIdle(t *testing.T) {
 	db := &mockDB{}
 	haRest := &mockHARestClient{entityState: "idle"}
-	service := NewPlaybackService(db, haRest)
+	service := NewPlaybackService(db, haRest, nil)
 
 	req := &PlaybackRequest{
 		TagID:         "tag-123",
@@ -147,7 +151,7 @@ func TestPlay_DeviceIdle(t *testing.T) {
 func TestPlay_DeviceAsleep_WakesDevice(t *testing.T) {
 	db := &mockDB{}
 	haRest := &mockHARestClient{entityState: "off"}
-	service := NewPlaybackService(db, haRest)
+	service := NewPlaybackService(db, haRest, nil)
 
 	req := &PlaybackRequest{
 		TagID:         "tag-123",
@@ -176,7 +180,7 @@ func TestPlay_StateCheckFails_ContinuesAnyway(t *testing.T) {
 	haRest := &mockHARestClient{
 		getStateErr: errors.New("failed to get state"),
 	}
-	service := NewPlaybackService(db, haRest)
+	service := NewPlaybackService(db, haRest, nil)
 
 	req := &PlaybackRequest{
 		TagID:         "tag-123",
@@ -207,7 +211,7 @@ func TestPlay_WakeDeviceFails(t *testing.T) {
 		entityState: "off",
 		turnOnErr:   errors.New("failed to turn on"),
 	}
-	service := NewPlaybackService(db, haRest)
+	service := NewPlaybackService(db, haRest, nil)
 
 	req := &PlaybackRequest{
 		TagID:         "tag-123",
@@ -237,7 +241,7 @@ func TestPlay_PlayMediaFails(t *testing.T) {
 		entityState:  "idle",
 		playMediaErr: errors.New("failed to play media"),
 	}
-	service := NewPlaybackService(db, haRest)
+	service := NewPlaybackService(db, haRest, nil)
 
 	req := &PlaybackRequest{
 		TagID:         "tag-123",
@@ -266,7 +270,7 @@ func TestPlay_LoggingFails_DoesNotFailRequest(t *testing.T) {
 		createLogErr: errors.New("failed to create log"),
 	}
 	haRest := &mockHARestClient{entityState: "idle"}
-	service := NewPlaybackService(db, haRest)
+	service := NewPlaybackService(db, haRest, nil)
 
 	req := &PlaybackRequest{
 		TagID:         "tag-123",
@@ -298,7 +302,7 @@ func TestPlay_PlexURLFormat(t *testing.T) {
 			return nil
 		},
 	}
-	service := NewPlaybackService(db, haRest)
+	service := NewPlaybackService(db, haRest, nil)
 
 	req := &PlaybackRequest{
 		TagID:         "tag-123",
@@ -330,7 +334,7 @@ func TestWakeAppleTV_Success(t *testing.T) {
 			return nil
 		},
 	}
-	service := NewPlaybackService(db, haRest)
+	service := NewPlaybackService(db, haRest, nil)
 
 	err := service.wakeAppleTV(context.Background(), "media_player.living_room")
 
@@ -345,7 +349,7 @@ func TestWakeAppleTV_Success(t *testing.T) {
 func TestWakeAppleTV_ContextCancelled(t *testing.T) {
 	db := &mockDB{}
 	haRest := &mockHARestClient{}
-	service := NewPlaybackService(db, haRest)
+	service := NewPlaybackService(db, haRest, nil)
 
 	// Create context that's already cancelled
 	ctx, cancel := context.WithCancel(context.Background())
@@ -366,7 +370,7 @@ func TestWakeAppleTV_TurnOnFails(t *testing.T) {
 	haRest := &mockHARestClient{
 		turnOnErr: errors.New("device unavailable"),
 	}
-	service := NewPlaybackService(db, haRest)
+	service := NewPlaybackService(db, haRest, nil)
 
 	err := service.wakeAppleTV(context.Background(), "media_player.living_room")
 
@@ -378,7 +382,7 @@ func TestWakeAppleTV_TurnOnFails(t *testing.T) {
 func TestWakeAppleTV_Timeout(t *testing.T) {
 	db := &mockDB{}
 	haRest := &mockHARestClient{}
-	service := NewPlaybackService(db, haRest)
+	service := NewPlaybackService(db, haRest, nil)
 
 	// Create context with very short timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Millisecond)

@@ -193,6 +193,53 @@ func (c *RestClient) PlayMedia(ctx context.Context, entityID, contentType, conte
 	return nil
 }
 
+// MediaStop calls the media_player.media_stop service to stop playback
+func (c *RestClient) MediaStop(ctx context.Context, entityID string) error {
+	url := fmt.Sprintf("%s/api/services/media_player/media_stop", c.baseURL)
+
+	payload := map[string]interface{}{
+		"entity_id": entityID,
+	}
+
+	jsonData, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	if c.devMode {
+		logger.Debug("Calling media_stop service", "url", url, "entity_id", entityID)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to make request: %w", err)
+	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			logger.Warn("Failed to close response body", "error", err)
+		}
+	}()
+
+	if c.devMode {
+		logger.Debug("Media_stop response received", "status_code", resp.StatusCode)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("unexpected status code: %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	return nil
+}
+
 // Entity represents a Home Assistant entity with its state and attributes
 type Entity struct {
 	EntityID   string                 `json:"entity_id"`

@@ -148,9 +148,19 @@ func (h *PlayHandler) PlayByRatingKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create playback service
+	// Create playback service with Plex client factory
 	haClient := ha.NewRestClient(h.haURL, h.haToken, h.devMode)
-	playbackService := services.NewPlaybackService(h.db, haClient)
+	plexClientFactory := func(serverID string, _ int64) services.PlexClient {
+		// Find the server and create a client
+		// Note: we use user.PlexAuthToken directly since we already have the user in scope
+		for _, srv := range h.servers {
+			if srv.ID == serverID && len(srv.URLs) > 0 {
+				return h.newPlexClient(srv.URLs[0], srv.ID, user.PlexAuthToken, h.devMode)
+			}
+		}
+		return nil
+	}
+	playbackService := services.NewPlaybackService(h.db, haClient, plexClientFactory)
 
 	// Build playback request
 	playbackReq := &services.PlaybackRequest{

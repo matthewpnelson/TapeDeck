@@ -125,6 +125,7 @@ func main() {
 	var pairingHandler *handlers.PairingHandler
 	var statusHandler *handlers.StatusHandler
 	var settingsHandler *handlers.SettingsHandler
+	var webhookHandler *handlers.WebhookHandler
 	var haClient *ha.HAClient
 
 	// initializeHandlers sets up all runtime handlers from config.yml
@@ -225,8 +226,28 @@ func main() {
 		// Initialize Home Assistant REST client
 		haRest := ha.NewRestClient(runtimeCfg.HomeAssistant.URL, haToken, cfg.DevMode)
 
+		// Create Plex client factory for PlaybackService
+		// This allows the service to create Plex clients for any server on demand
+		plexClientFactory := func(serverID string, userID int64) services.PlexClient {
+			// Find the server in our list
+			for _, srv := range servers {
+				if srv.ID == serverID && len(srv.URLs) > 0 {
+					// Get user's auth token from database
+					plexCtx := context.Background()
+					user, err := database.GetUserByID(plexCtx, userID)
+					if err != nil {
+						logger.Warn("Failed to get user for Plex client", "user_id", userID, "error", err)
+						return nil
+					}
+					return plex.NewClient(srv.URLs[0], srv.ID, user.PlexAuthToken, cfg.DevMode)
+				}
+			}
+			logger.Warn("Server not found for Plex client factory", "server_id", serverID)
+			return nil
+		}
+
 		// Initialize playback service
-		playbackService := services.NewPlaybackService(database, haRest)
+		playbackService := services.NewPlaybackService(database, haRest, plexClientFactory)
 
 		// Initialize pairing handler
 		pairingHandler = handlers.NewPairingHandler(
@@ -238,13 +259,16 @@ func main() {
 			cfg.DevMode,
 		)
 
+		// Initialize webhook handler for NFC reader webhooks
+		webhookHandler = handlers.NewWebhookHandler(pairingHandler, runtimeCfg.HomeAssistant.WebhookSecret)
+
 		// Initialize status handler
 		statusHandler = handlers.NewStatusHandler(haClient, cfg.ConfigPath(), database)
 
 		// Sanity check: ensure all handlers were initialized
 		// This should never fail unless there's a programming error above
 		if mediaHandler == nil || mediaDetailHandler == nil || mappingsHandler == nil || playbackHandler == nil ||
-			playHandler == nil || pairingHandler == nil || statusHandler == nil {
+			playHandler == nil || pairingHandler == nil || webhookHandler == nil || statusHandler == nil {
 			return fmt.Errorf("handler initialization incomplete - this is a programming error")
 		}
 
@@ -286,13 +310,14 @@ func main() {
 		GetPlaybackHandler:    func() *handlers.PlaybackHandler { return playbackHandler },
 		GetPlayHandler:        func() *handlers.PlayHandler { return playHandler },
 		GetStatusHandler:      func() *handlers.StatusHandler { return statusHandler },
+		GetWebhookHandler:     func() *handlers.WebhookHandler { return webhookHandler },
 
 		// HandlersReady is used by requireInitialized middleware to check if
 		// handlers have been initialized. Returns true only if all runtime
 		// handlers are non-nil (i.e., initializeHandlers() has been called).
 		HandlersReady: func() bool {
 			return mediaHandler != nil && mediaDetailHandler != nil && mappingsHandler != nil && pairingHandler != nil &&
-				playbackHandler != nil && playHandler != nil && statusHandler != nil
+				playbackHandler != nil && playHandler != nil && webhookHandler != nil && statusHandler != nil
 		},
 	}
 

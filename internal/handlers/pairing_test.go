@@ -120,7 +120,7 @@ func TestPairingHandler_WebSocketPairing_Success(t *testing.T) {
 	}
 
 	// Create playback service (nil HA REST client for pairing-only test)
-	playbackService := services.NewPlaybackService(testDB, nil)
+	playbackService := services.NewPlaybackService(testDB, nil, nil)
 
 	handler := NewPairingHandler(store, testDB, mockHA, playbackService, "", false)
 
@@ -268,7 +268,7 @@ func TestPairingHandler_WebSocketPairing_DuplicateTag(t *testing.T) {
 	}
 
 	// Create playback service (nil HA REST client for pairing-only test)
-	playbackService := services.NewPlaybackService(testDB, nil)
+	playbackService := services.NewPlaybackService(testDB, nil, nil)
 
 	handler := NewPairingHandler(store, testDB, mockHA, playbackService, "", false)
 
@@ -382,7 +382,7 @@ func TestPairingHandler_WebSocketPairing_InvalidMessage(t *testing.T) {
 	}
 
 	// Create playback service (nil HA REST client for pairing-only test)
-	playbackService := services.NewPlaybackService(testDB, nil)
+	playbackService := services.NewPlaybackService(testDB, nil, nil)
 
 	handler := NewPairingHandler(store, testDB, mockHA, playbackService, "", false)
 
@@ -466,7 +466,7 @@ func TestPairingHandler_WebSocketPairing_MissingFields(t *testing.T) {
 	}
 
 	// Create playback service (nil HA REST client for pairing-only test)
-	playbackService := services.NewPlaybackService(testDB, nil)
+	playbackService := services.NewPlaybackService(testDB, nil, nil)
 
 	handler := NewPairingHandler(store, testDB, mockHA, playbackService, "", false)
 
@@ -639,6 +639,10 @@ func (m *mockHARestClient) PlayMedia(_ context.Context, entityID, contentType, c
 	return m.playMediaError
 }
 
+func (m *mockHARestClient) MediaStop(_ context.Context, _ string) error {
+	return nil
+}
+
 func TestPairingHandler_Playback_Success(t *testing.T) {
 	store := middleware.NewSessionStore([]byte("test-secret-key-32-chars-long!!"), false)
 
@@ -681,7 +685,7 @@ func TestPairingHandler_Playback_Success(t *testing.T) {
 	mockRest := &mockHARestClient{}
 
 	// Create playback service with mock REST client
-	playbackService := services.NewPlaybackService(testDB, mockRest)
+	playbackService := services.NewPlaybackService(testDB, mockRest, nil)
 
 	_ = NewPairingHandler(store, testDB, mockHA, playbackService, "", false)
 
@@ -739,7 +743,7 @@ func TestPairingHandler_Playback_NoMapping(t *testing.T) {
 	mockRest := &mockHARestClient{}
 
 	// Create playback service with mock REST client
-	playbackService := services.NewPlaybackService(testDB, mockRest)
+	playbackService := services.NewPlaybackService(testDB, mockRest, nil)
 
 	_ = NewPairingHandler(store, testDB, mockHA, playbackService, "", false)
 
@@ -799,7 +803,7 @@ func TestPairingHandler_Playback_RestClientError(t *testing.T) {
 	}
 
 	// Create playback service with mock REST client
-	playbackService := services.NewPlaybackService(testDB, mockRest)
+	playbackService := services.NewPlaybackService(testDB, mockRest, nil)
 
 	_ = NewPairingHandler(store, testDB, mockHA, playbackService, "", false)
 
@@ -858,7 +862,7 @@ func TestPairingHandler_Playback_NilRestClient(t *testing.T) {
 	}
 
 	// Create playback service with nil REST client (should handle gracefully)
-	playbackService := services.NewPlaybackService(testDB, nil)
+	playbackService := services.NewPlaybackService(testDB, nil, nil)
 
 	_ = NewPairingHandler(store, testDB, mockHA, playbackService, "", false)
 
@@ -906,7 +910,7 @@ func TestPairingHandler_PairingMode_StillWorks(t *testing.T) {
 	mockRest := &mockHARestClient{}
 
 	// Create playback service with mock REST client
-	playbackService := services.NewPlaybackService(testDB, mockRest)
+	playbackService := services.NewPlaybackService(testDB, mockRest, nil)
 
 	handler := NewPairingHandler(store, testDB, mockHA, playbackService, "", false)
 
