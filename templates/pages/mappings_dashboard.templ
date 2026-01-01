@@ -51,7 +51,7 @@ templ dashboardContent(mappings []*models.CardMapping, sortOrder string, searchQ
 			</form>
 		</div>
 		if printMode {
-			<form id="print-form" method="POST" action="/mappings/generate-stickers">
+			<form id="print-form" method="POST" action="/mappings/generate-stickers" target="_blank">
 				<div style="margin-bottom: 1rem; display: flex; gap: 1rem;">
 					<button type="button" id="select-all" class="btn" style="background: #6b7280;">Select All</button>
 					<button type="button" id="deselect-all" class="btn" style="background: #6b7280;">Deselect All</button>
@@ -108,21 +108,29 @@ templ dashboardContent(mappings []*models.CardMapping, sortOrder string, searchQ
 			} else {
 				<div class="card-grid">
 					for _, mapping := range mappings {
-						<a href={ templ.SafeURL(fmt.Sprintf("/media/%s/%s", mapping.PlexServerID, mapping.MediaID)) } class="card-item">
-							if mapping.ThumbnailURL != "" {
-								<div class="card-poster" style={ fmt.Sprintf("background-image: url(%s)", mapping.ThumbnailURL) }></div>
-							} else {
-								<div class="card-poster card-poster-placeholder">
-									<div class="placeholder-icon">🎬</div>
+						<div class="card-item-wrapper" style="position: relative; aspect-ratio: 2/3; display: block;">
+							<a href={ templ.SafeURL(fmt.Sprintf("/media/%s/%s", mapping.PlexServerID, mapping.MediaID)) } class="card-item" style="display: block; height: 100%;">
+								if mapping.ThumbnailURL != "" {
+									<div class="card-poster" style={ fmt.Sprintf("background-image: url(%s)", mapping.ThumbnailURL) }></div>
+								} else {
+									<div class="card-poster card-poster-placeholder">
+										<div class="placeholder-icon">🎬</div>
+									</div>
+								}
+								<div class="card-overlay">
+									<div class="card-title">{ mapping.MediaTitle }</div>
 								</div>
-							}
-							<div class="card-overlay">
-								<div class="card-title">{ mapping.MediaTitle }</div>
-							</div>
-						</a>
+							</a>
+							<form method="POST" action={ templ.SafeURL(fmt.Sprintf("/mappings/%d/delete", mapping.ID)) } class="delete-form" style="position: absolute; top: 0.5rem; right: 0.5rem; z-index: 10;">
+								<button type="submit" class="delete-btn" title="Delete mapping" aria-label={ fmt.Sprintf("Delete %s", mapping.MediaTitle) }>
+									🗑️
+								</button>
+							</form>
+						</div>
 					}
 				</div>
 			}
+			<script src="/static/js/delete-mapping.js"></script>
 		}
 	</div>
 }

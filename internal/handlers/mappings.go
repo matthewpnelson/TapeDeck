@@ -445,7 +445,7 @@ func (h *MappingsHandler) SearchJSON(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Search across all servers in parallel
+	// Search across all servers in parallel (both regular media and Live TV)
 	type serverResult struct {
 		serverName string
 		serverID   string
@@ -453,9 +453,9 @@ func (h *MappingsHandler) SearchJSON(w http.ResponseWriter, r *http.Request) {
 		err        error
 	}
 
-	resultChan := make(chan serverResult, len(h.servers))
+	resultChan := make(chan serverResult, len(h.servers)*2) // *2 for both searches
 
-	// Launch goroutine for each server
+	// Launch goroutine for each server to search regular media
 	for _, server := range h.servers {
 		go func(srv ServerInfo) {
 			// Try all URLs for this server until one works
@@ -486,11 +486,49 @@ func (h *MappingsHandler) SearchJSON(w http.ResponseWriter, r *http.Request) {
 		}(server)
 	}
 
-	// Collect results from all servers
+	// Also search Live TV channels on each server
+	for _, server := range h.servers {
+		go func(srv ServerInfo) {
+			var channels []plex.MediaItem
+			var lastErr error
+
+			for _, url := range srv.URLs {
+				plexClient := h.newPlexClient(url, srv.ID, user.PlexAuthToken, h.devMode)
+
+				// Get all Live TV channels
+				apiCtx, cancel := context.WithTimeout(ctx, constants.PlexAPITimeout)
+				channels, lastErr = plexClient.GetAllLiveTVChannels(apiCtx)
+				cancel()
+
+				if lastErr == nil {
+					// Success! Filter channels by query
+					var filteredChannels []plex.MediaItem
+					queryLower := strings.ToLower(query)
+					for _, ch := range channels {
+						if strings.Contains(strings.ToLower(ch.Title), queryLower) {
+							filteredChannels = append(filteredChannels, ch)
+						}
+					}
+					channels = filteredChannels
+					break
+				}
+				// Try next URL
+			}
+
+			resultChan <- serverResult{
+				serverName: srv.Name,
+				serverID:   srv.ID,
+				items:      channels,
+				err:        lastErr,
+			}
+		}(server)
+	}
+
+	// Collect results from all servers (both regular media and Live TV searches)
 	var allItems []plex.MediaItem
 	var searchErrors []error
 
-	for i := 0; i < len(h.servers); i++ {
+	for i := 0; i < len(h.servers)*2; i++ {
 		result := <-resultChan
 		if result.err != nil {
 			log.Warn("Failed to search server", "server", result.serverName, "error", result.err)
@@ -528,9 +566,9 @@ func (h *MappingsHandler) SearchJSON(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// If all servers failed, return error
-	if len(searchErrors) == len(h.servers) && len(h.servers) > 0 {
-		log.Error("All servers failed to search")
+	// If all searches failed (both regular media and Live TV), return error
+	if len(searchErrors) == len(h.servers)*2 && len(h.servers) > 0 {
+		log.Error("All server searches failed")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
 		_, _ = fmt.Fprint(w, `{"error":"Failed to search all servers","results":[]}`)
@@ -656,13 +694,44 @@ func (h *MappingsHandler) GenerateStickers(w http.ResponseWriter, r *http.Reques
 	timestamp := time.Now().Format("2006-01-02-150405")
 	filename := fmt.Sprintf("tapedeck-stickers-%s.pdf", timestamp)
 
+	// Set headers before writing response
 	w.Header().Set("Content-Type", "application/pdf")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s", filename))
+	w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=\"%s\"", filename))
 	w.Header().Set("Content-Length", strconv.Itoa(len(pdfBytes)))
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
 
-	if _, err := w.Write(pdfBytes); err != nil {
-		log.Error("Failed to write PDF response", "error", err)
+	// Write PDF in chunks to avoid buffer issues with large files
+	const chunkSize = 1024 * 1024 // 1MB chunks
+	totalWritten := 0
+
+	for totalWritten < len(pdfBytes) {
+		end := totalWritten + chunkSize
+		if end > len(pdfBytes) {
+			end = len(pdfBytes)
+		}
+
+		chunk := pdfBytes[totalWritten:end]
+		n, err := w.Write(chunk)
+		totalWritten += n
+
+		if err != nil {
+			log.Error("Failed to write PDF chunk", "error", err, "bytes_written", totalWritten, "total_size", len(pdfBytes))
+			return
+		}
+
+		// Flush after each chunk if possible (for http.ResponseWriter with Flush support)
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
 	}
 
-	log.Info("Generated stickers PDF", "filename", filename, "mapping_count", len(mappings))
+	if totalWritten != len(pdfBytes) {
+		log.Warn("Incomplete PDF write", "expected", len(pdfBytes), "written", totalWritten)
+		return
+	}
+
+	log.Info("Generated stickers PDF", "filename", filename, "mapping_count", len(mappings), "bytes", len(pdfBytes))
 }

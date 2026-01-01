@@ -783,3 +783,59 @@ func TestGenerateStickers(t *testing.T) {
 		t.Error("Response is not a valid PDF")
 	}
 }
+
+// Mock Plex client for handler tests
+type mockPlexClient struct {
+	getLibrariesFunc         func(context.Context) ([]plex.Library, error)
+	getLibraryContentsFunc   func(context.Context, string) ([]plex.MediaItem, error)
+	searchFunc               func(context.Context, string) ([]plex.MediaItem, error)
+	getMetadataFunc          func(context.Context, string) (*plex.MediaMetadata, error)
+	getAllLiveTVChannelsFunc func(context.Context) ([]plex.MediaItem, error)
+	getPlaylistsFunc         func(context.Context) ([]plex.Playlist, error)
+}
+
+func (m *mockPlexClient) GetLibraries(ctx context.Context) ([]plex.Library, error) {
+	if m.getLibrariesFunc != nil {
+		return m.getLibrariesFunc(ctx)
+	}
+	return nil, nil
+}
+
+func (m *mockPlexClient) GetLibraryContents(ctx context.Context, libraryKey string) ([]plex.MediaItem, error) {
+	if m.getLibraryContentsFunc != nil {
+		return m.getLibraryContentsFunc(ctx, libraryKey)
+	}
+	return nil, nil
+}
+
+func (m *mockPlexClient) Search(ctx context.Context, query string) ([]plex.MediaItem, error) {
+	if m.searchFunc != nil {
+		return m.searchFunc(ctx, query)
+	}
+	return nil, nil
+}
+
+func (m *mockPlexClient) GetMetadata(ctx context.Context, ratingKey string) (*plex.MediaMetadata, error) {
+	if m.getMetadataFunc != nil {
+		return m.getMetadataFunc(ctx, ratingKey)
+	}
+	return nil, nil
+}
+
+func (m *mockPlexClient) GetAllLiveTVChannels(ctx context.Context) ([]plex.MediaItem, error) {
+	if m.getAllLiveTVChannelsFunc != nil {
+		return m.getAllLiveTVChannelsFunc(ctx)
+	}
+	return nil, nil
+}
+
+func (m *mockPlexClient) GetPlaylists(ctx context.Context) ([]plex.Playlist, error) {
+	if m.getPlaylistsFunc != nil {
+		return m.getPlaylistsFunc(ctx)
+	}
+	return nil, nil
+}
+
+func (m *mockPlexClient) GetNextUnwatchedEpisode(_ context.Context, _ string) (*plex.MediaMetadata, error) {
+	return nil, nil
+}
