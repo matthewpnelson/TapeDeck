@@ -31,7 +31,8 @@ type Connection struct {
 
 // HAConfig represents Home Assistant configuration
 type HAConfig struct {
-	URL string `yaml:"url"`
+	URL           string `yaml:"url"`
+	WebhookSecret string `yaml:"webhook_secret,omitempty"` // Optional secret for validating NFC webhook requests
 	// Token is stored encrypted in the database (settings table)
 }
 

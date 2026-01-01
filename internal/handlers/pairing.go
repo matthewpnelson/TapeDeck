@@ -304,10 +304,22 @@ func (client *pairingClient) writePump() {
 	}
 }
 
-// handleTagScanned is called when a tag is scanned in Home Assistant
+// HandleTagScanned is called when a tag is scanned (from HA WebSocket or webhook)
+// It is the public entry point for tag scans and accepts a context.
+func (h *PairingHandler) HandleTagScanned(ctx context.Context, tagID string) {
+	logger.Info("Tag scanned", "tag_id", tagID)
+	h.handleTagScannedInternal(ctx, tagID)
+}
+
+// handleTagScanned is called when a tag is scanned in Home Assistant via WebSocket
 func (h *PairingHandler) handleTagScanned(tagID string) {
 	ctx := context.Background()
-	logger.Info("Tag scanned from HA", "tag_id", tagID)
+	logger.Info("Tag scanned from HA WebSocket", "tag_id", tagID)
+	h.handleTagScannedInternal(ctx, tagID)
+}
+
+// handleTagScannedInternal contains the actual tag scanning logic
+func (h *PairingHandler) handleTagScannedInternal(ctx context.Context, tagID string) {
 
 	h.clientsMu.Lock()
 	defer h.clientsMu.Unlock()
