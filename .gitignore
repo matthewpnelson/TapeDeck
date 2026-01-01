@@ -54,3 +54,4 @@ vendor/
 
 # Git worktrees
 .worktrees/
+tapedeck.log
