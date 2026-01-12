@@ -136,6 +136,131 @@ func (c *Client) GetAuthToken() string {
 	return c.authToken
 }
 
+// GetServerID returns the server ID for this client
+func (c *Client) GetServerID() string {
+	return c.serverID
+}
+
+// GetMachineIdentifier retrieves the server's machine identifier
+// This is needed for constructing PlayQueue URIs
+func (c *Client) GetMachineIdentifier(ctx context.Context) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.serverURL+"/", nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("X-Plex-Token", c.authToken)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to make request: %w", err)
+	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			logger.Warn("Failed to close response body", "error", err)
+		}
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", &APIError{
+			StatusCode: resp.StatusCode,
+			Message:    "failed to get server identity",
+		}
+	}
+
+	var result struct {
+		MediaContainer struct {
+			MachineIdentifier string `json:"machineIdentifier"`
+		} `json:"MediaContainer"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return result.MediaContainer.MachineIdentifier, nil
+}
+
+// CreatePlayQueue creates a play queue for a specific media item
+// The queue is bound to the user whose token is used, which may help with
+// content restrictions when playing on devices with different active profiles.
+// mediaType should be "video" for movies/shows or "audio" for music.
+func (c *Client) CreatePlayQueue(ctx context.Context, ratingKey string, mediaType string) (*PlayQueue, error) {
+	// Get the machine identifier for the URI
+	machineID, err := c.GetMachineIdentifier(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get machine identifier: %w", err)
+	}
+
+	// Build the URI for the play queue
+	// Format: server://MACHINE_ID/com.plexapp.plugins.library/library/metadata/RATING_KEY
+	uri := fmt.Sprintf("server://%s/com.plexapp.plugins.library/library/metadata/%s", machineID, ratingKey)
+
+	// POST to /playQueues
+	reqURL := fmt.Sprintf("%s/playQueues", c.serverURL)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	// Add query parameters
+	q := req.URL.Query()
+	q.Add("type", mediaType)
+	q.Add("uri", uri)
+	q.Add("continuous", "1")
+	req.URL.RawQuery = q.Encode()
+
+	// Set headers
+	req.Header.Set("X-Plex-Token", c.authToken)
+	req.Header.Set("Accept", "application/json")
+	// These headers identify TapeDeck as the client creating the PlayQueue
+	req.Header.Set("X-Plex-Client-Identifier", "TapeDeck")
+	req.Header.Set("X-Plex-Product", "TapeDeck")
+	req.Header.Set("X-Plex-Version", "1.0.0")
+
+	logger.Info("Creating PlayQueue",
+		"rating_key", ratingKey,
+		"media_type", mediaType,
+		"uri", uri,
+		"machine_id", machineID)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to make request: %w", err)
+	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			logger.Warn("Failed to close response body", "error", err)
+		}
+	}()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		logger.Error("Failed to create PlayQueue",
+			"status_code", resp.StatusCode,
+			"response", string(bodyBytes))
+		return nil, &APIError{
+			StatusCode: resp.StatusCode,
+			Message:    fmt.Sprintf("failed to create play queue: %s", string(bodyBytes)),
+		}
+	}
+
+	var queueResp PlayQueueResponse
+	if err := json.NewDecoder(resp.Body).Decode(&queueResp); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	logger.Info("PlayQueue created successfully",
+		"play_queue_id", queueResp.MediaContainer.PlayQueueID,
+		"selected_item_id", queueResp.MediaContainer.PlayQueueSelectedItemID)
+
+	return &PlayQueue{
+		PlayQueueID:             queueResp.MediaContainer.PlayQueueID,
+		PlayQueueSelectedItemID: queueResp.MediaContainer.PlayQueueSelectedItemID,
+	}, nil
+}
+
 // GetLibraries retrieves all library sections from the Plex server
 func (c *Client) GetLibraries(ctx context.Context) ([]Library, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.serverURL+"/library/sections", nil)
@@ -288,6 +413,26 @@ func (c *Client) GetPlaylists(ctx context.Context) ([]Playlist, error) {
 	}
 
 	return playlistResp.MediaContainer.Metadata, nil
+}
+
+// PlayQueue represents a Plex play queue
+// Play queues are server-side constructs bound to the user whose token created them
+type PlayQueue struct {
+	PlayQueueID           int64  `json:"playQueueID"`
+	PlayQueueSelectedItemID int64  `json:"playQueueSelectedItemID,omitempty"`
+}
+
+// PlayQueueResponse represents the response from creating a play queue
+type PlayQueueResponse struct {
+	MediaContainer struct {
+		PlayQueueID             int64 `json:"playQueueID"`
+		PlayQueueSelectedItemID int64 `json:"playQueueSelectedItemID"`
+	} `json:"MediaContainer"`
+}
+
+// ServerIdentity represents the server identity response
+type ServerIdentity struct {
+	MachineIdentifier string `json:"machineIdentifier"`
 }
 
 // MediaMetadata represents detailed metadata for a media item

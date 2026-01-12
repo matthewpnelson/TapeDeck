@@ -20,6 +20,8 @@ type PlexClientFactory func(serverID string, userID int64, plexUserUUID string) 
 type PlexClient interface {
 	GetNextUnwatchedEpisode(ctx context.Context, showRatingKey string) (*plex.MediaMetadata, error)
 	GetAuthToken() string
+	GetServerID() string
+	CreatePlayQueue(ctx context.Context, ratingKey string, mediaType string) (*plex.PlayQueue, error)
 }
 
 // PlaybackService handles media playback orchestration
@@ -142,10 +144,14 @@ func (s *PlaybackService) Play(ctx context.Context, req *PlaybackRequest) (*Play
 	}
 
 	// Build Plex deep link based on media type
-	// Include X-Plex-Token to ensure playback uses the correct user context
+	// When PlexUserUUID is set, try to use PlayQueue to bind playback to the user's context
+	// This may help with content restrictions on devices with different active profiles
 	var plexURL string
+	var usedPlayQueue bool
+
 	if req.MediaType == "playlist" {
 		// Playlist deep link with shuffle parameter
+		// Note: PlayQueue doesn't support playlists, so we use the direct link
 		if authToken != "" {
 			plexURL = fmt.Sprintf(
 				"plex://play/?metadataKey=/playlists/%s&server=%s&shuffle=1&X-Plex-Token=%s",
@@ -164,21 +170,54 @@ func (s *PlaybackService) Play(ctx context.Context, req *PlaybackRequest) (*Play
 	} else {
 		// Regular library content (movie, show, episode, etc.)
 		// For shows, mediaID has been resolved to the next episode's ratingKey
-		if authToken != "" {
-			plexURL = fmt.Sprintf(
-				"plex://play/?metadataKey=/library/metadata/%s&server=%s&X-Plex-Token=%s",
-				mediaID,
-				req.PlexServerID,
-				authToken,
-			)
-		} else {
-			plexURL = fmt.Sprintf(
-				"plex://play/?metadataKey=/library/metadata/%s&server=%s",
-				mediaID,
-				req.PlexServerID,
-			)
+
+		// Try to use PlayQueue when a specific Plex user is set
+		// PlayQueue creates a server-side queue bound to the user's token
+		if req.PlexUserUUID != "" && plexClient != nil {
+			// Determine media type for PlayQueue
+			queueType := "video"
+			if req.MediaType == "track" || req.MediaType == "album" || req.MediaType == "artist" {
+				queueType = "audio"
+			}
+
+			queue, err := plexClient.CreatePlayQueue(ctx, mediaID, queueType)
+			if err != nil {
+				logger.Warn("Failed to create PlayQueue, falling back to direct link",
+					"media_id", mediaID,
+					"error", err)
+			} else {
+				// Use PlayQueue URL - this binds playback to the user who created the queue
+				plexURL = fmt.Sprintf(
+					"plex://play/?playQueueID=%d&server=%s",
+					queue.PlayQueueID,
+					req.PlexServerID,
+				)
+				usedPlayQueue = true
+				logger.Info("Built PlayQueue deep link",
+					"url", plexURL,
+					"play_queue_id", queue.PlayQueueID,
+					"plex_user_uuid", req.PlexUserUUID)
+			}
 		}
-		logger.Info("Built library content deep link", "url", plexURL, "has_token", authToken != "")
+
+		// Fall back to direct metadataKey link if PlayQueue wasn't used
+		if !usedPlayQueue {
+			if authToken != "" {
+				plexURL = fmt.Sprintf(
+					"plex://play/?metadataKey=/library/metadata/%s&server=%s&X-Plex-Token=%s",
+					mediaID,
+					req.PlexServerID,
+					authToken,
+				)
+			} else {
+				plexURL = fmt.Sprintf(
+					"plex://play/?metadataKey=/library/metadata/%s&server=%s",
+					mediaID,
+					req.PlexServerID,
+				)
+			}
+			logger.Info("Built library content deep link", "url", plexURL, "has_token", authToken != "")
+		}
 	}
 
 	// Check Apple TV state
