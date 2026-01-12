@@ -25,8 +25,6 @@ type PlexClientInterface interface {
 	GetPlaylists(ctx context.Context) ([]plex.Playlist, error)
 	GetNextUnwatchedEpisode(ctx context.Context, showRatingKey string) (*plex.MediaMetadata, error)
 	GetAuthToken() string
-	GetServerID() string
-	CreatePlayQueue(ctx context.Context, ratingKey string, mediaType string) (*plex.PlayQueue, error)
 }
 
 // PlexClientFactory creates a new Plex client

@@ -843,11 +843,3 @@ func (m *mockPlexClient) GetNextUnwatchedEpisode(_ context.Context, _ string) (*
 func (m *mockPlexClient) GetAuthToken() string {
 	return "mock-token"
 }
-
-func (m *mockPlexClient) GetServerID() string {
-	return "mock-server-id"
-}
-
-func (m *mockPlexClient) CreatePlayQueue(_ context.Context, _ string, _ string) (*plex.PlayQueue, error) {
-	return nil, nil
-}
