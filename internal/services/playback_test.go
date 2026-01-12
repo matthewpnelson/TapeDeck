@@ -123,7 +123,9 @@ func TestPlayByTagID_MappingNotFound(t *testing.T) {
 	}
 }
 
-func TestPlay_DeviceIdle(t *testing.T) {
+func TestPlay_DeviceIdle_WakesDevice(t *testing.T) {
+	// "idle" state can mean the Apple TV is asleep but HA reports it as idle,
+	// so we wake on idle to be safe. Waking an already-awake device is harmless.
 	db := &mockDB{}
 	haRest := &mockHARestClient{entityState: "idle"}
 	service := NewPlaybackService(db, haRest, nil)
@@ -145,8 +147,8 @@ func TestPlay_DeviceIdle(t *testing.T) {
 	if !result.Success {
 		t.Errorf("Expected success=true, got false")
 	}
-	if result.WokeDevice {
-		t.Errorf("Expected woke_device=false, got true")
+	if !result.WokeDevice {
+		t.Errorf("Expected woke_device=true for idle state, got false")
 	}
 	if result.AppleTVState != "idle" {
 		t.Errorf("Expected state 'idle', got %s", result.AppleTVState)

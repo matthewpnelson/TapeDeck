@@ -249,9 +249,15 @@ func (s *PlaybackService) Play(ctx context.Context, req *PlaybackRequest) (*Play
 	}
 	result.AppleTVState = state
 
+	logger.Info("Apple TV state check",
+		"apple_tv", req.AppleTVEntity,
+		"state", state)
+
 	// Wake device if needed
-	if state == "off" || state == "standby" {
-		logger.Info("Apple TV is asleep, waking up",
+	// Note: "idle" can mean the TV is asleep but HA still reports it as idle,
+	// so we wake on idle too. Waking an already-awake device is harmless.
+	if state == "off" || state == "standby" || state == "idle" {
+		logger.Info("Waking Apple TV",
 			"apple_tv", req.AppleTVEntity,
 			"state", state)
 

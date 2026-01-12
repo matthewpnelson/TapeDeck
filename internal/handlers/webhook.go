@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"net/http"
@@ -66,8 +67,10 @@ func (h *WebhookHandler) HandleNFCWebhook(w http.ResponseWriter, r *http.Request
 
 	reqLogger.Info("Received NFC webhook", "tag_id", req.TagID)
 
-	// Trigger tag scanned handler (same flow as WebSocket events)
-	h.pairingHandler.HandleTagScanned(ctx, req.TagID)
+	// Trigger tag scanned handler in a goroutine with a background context.
+	// This allows playback to continue even if the HTTP client times out.
+	// The NFC reader doesn't need to wait for playback to complete.
+	go h.pairingHandler.HandleTagScanned(context.Background(), req.TagID)
 
 	// Return success
 	w.Header().Set("Content-Type", "application/json")
