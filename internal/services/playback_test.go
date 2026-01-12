@@ -44,6 +44,11 @@ func (m *mockDB) CreatePlaybackLog(ctx context.Context, log *models.PlaybackLog)
 	return 1, nil
 }
 
+func (m *mockDB) GetLastWatchedEpisode(_ context.Context, _, _ string) (*models.WatchProgress, error) {
+	// Default: no local watch progress
+	return nil, nil
+}
+
 // mockHARestClient implements HARestClient interface
 type mockHARestClient struct {
 	getStateFunc  func(ctx context.Context, entityID string) (string, error)

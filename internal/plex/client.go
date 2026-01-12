@@ -483,7 +483,12 @@ func (c *Client) GetChildren(ctx context.Context, ratingKey string) ([]MediaMeta
 // - The first unwatched episode (viewCount == 0)
 // - The first episode (S1E1) if all episodes are watched
 func (c *Client) GetNextUnwatchedEpisode(ctx context.Context, showRatingKey string) (*MediaMetadata, error) {
-	logger.Info("Finding next unwatched episode", "show_rating_key", showRatingKey)
+	// Log which token is being used (masked for security)
+	tokenPreview := ""
+	if len(c.authToken) > 8 {
+		tokenPreview = c.authToken[:4] + "..." + c.authToken[len(c.authToken)-4:]
+	}
+	logger.Info("Finding next unwatched episode", "show_rating_key", showRatingKey, "token_preview", tokenPreview)
 
 	// Get all seasons for the show
 	seasons, err := c.GetChildren(ctx, showRatingKey)
@@ -526,6 +531,14 @@ func (c *Client) GetNextUnwatchedEpisode(ctx context.Context, showRatingKey stri
 			if ep.Type != "episode" {
 				continue
 			}
+
+			// Log episode watch status for debugging
+			logger.Debug("Checking episode watch status",
+				"season", ep.ParentIndex,
+				"episode", ep.Index,
+				"title", ep.Title,
+				"view_count", ep.ViewCount,
+				"view_offset", ep.ViewOffset)
 
 			// Track first episode for fallback
 			if firstEpisode == nil {

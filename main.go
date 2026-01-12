@@ -126,6 +126,7 @@ func main() {
 	var statusHandler *handlers.StatusHandler
 	var settingsHandler *handlers.SettingsHandler
 	var webhookHandler *handlers.WebhookHandler
+	var plexWebhookHandler *handlers.PlexWebhookHandler
 	var haClient *ha.HAClient
 
 	// initializeHandlers sets up all runtime handlers from config.yml
@@ -245,6 +246,9 @@ func main() {
 
 					// If a Plex Home user UUID is specified, switch to that user's context
 					if plexUserUUID != "" {
+						logger.Info("Switching to Plex Home user for playback",
+							"user_uuid", plexUserUUID,
+							"server_id", serverID)
 						switchedToken, err := plexAuth.SwitchHomeUser(plexCtx, user.PlexAuthToken, plexUserUUID)
 						if err != nil {
 							logger.Warn("Failed to switch to Plex Home user, using admin token",
@@ -252,8 +256,9 @@ func main() {
 								"error", err)
 							// Continue with admin token as fallback
 						} else {
-							logger.Debug("Switched to Plex Home user",
-								"user_uuid", plexUserUUID)
+							logger.Info("Successfully switched to Plex Home user",
+								"user_uuid", plexUserUUID,
+								"token_changed", authToken != switchedToken)
 							authToken = switchedToken
 						}
 					}
@@ -281,13 +286,16 @@ func main() {
 		// Initialize webhook handler for NFC reader webhooks
 		webhookHandler = handlers.NewWebhookHandler(pairingHandler, runtimeCfg.HomeAssistant.WebhookSecret)
 
+		// Initialize Plex webhook handler for watch progress tracking
+		plexWebhookHandler = handlers.NewPlexWebhookHandler(database)
+
 		// Initialize status handler
 		statusHandler = handlers.NewStatusHandler(haClient, cfg.ConfigPath(), database)
 
 		// Sanity check: ensure all handlers were initialized
 		// This should never fail unless there's a programming error above
 		if mediaHandler == nil || mediaDetailHandler == nil || mappingsHandler == nil || playbackHandler == nil ||
-			playHandler == nil || pairingHandler == nil || webhookHandler == nil || statusHandler == nil {
+			playHandler == nil || pairingHandler == nil || webhookHandler == nil || plexWebhookHandler == nil || statusHandler == nil {
 			return fmt.Errorf("handler initialization incomplete - this is a programming error")
 		}
 
@@ -330,13 +338,14 @@ func main() {
 		GetPlayHandler:        func() *handlers.PlayHandler { return playHandler },
 		GetStatusHandler:      func() *handlers.StatusHandler { return statusHandler },
 		GetWebhookHandler:     func() *handlers.WebhookHandler { return webhookHandler },
+		GetPlexWebhookHandler: func() *handlers.PlexWebhookHandler { return plexWebhookHandler },
 
 		// HandlersReady is used by requireInitialized middleware to check if
 		// handlers have been initialized. Returns true only if all runtime
 		// handlers are non-nil (i.e., initializeHandlers() has been called).
 		HandlersReady: func() bool {
 			return mediaHandler != nil && mediaDetailHandler != nil && mappingsHandler != nil && pairingHandler != nil &&
-				playbackHandler != nil && playHandler != nil && webhookHandler != nil && statusHandler != nil
+				playbackHandler != nil && playHandler != nil && webhookHandler != nil && plexWebhookHandler != nil && statusHandler != nil
 		},
 	}
 

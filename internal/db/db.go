@@ -561,3 +561,123 @@ func (db *DB) GetSettings(ctx context.Context) (*models.Settings, error) {
 
 	return settings, nil
 }
+
+// CreateWatchProgress records that a user completed watching an episode.
+// Uses UPSERT to handle duplicate scrobble events for the same episode.
+func (db *DB) CreateWatchProgress(ctx context.Context, wp *models.WatchProgress) error {
+	if err := wp.Validate(); err != nil {
+		return fmt.Errorf("invalid watch progress: %w", err)
+	}
+
+	_, err := db.conn.ExecContext(ctx,
+		`INSERT INTO watch_progress (
+			plex_account_id, plex_account_name, plex_server_id,
+			show_rating_key, episode_rating_key,
+			season_number, episode_number, episode_title,
+			completed_at, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(plex_account_id, episode_rating_key) DO UPDATE SET
+			completed_at = excluded.completed_at`,
+		wp.PlexAccountID,
+		wp.PlexAccountName,
+		wp.PlexServerID,
+		wp.ShowRatingKey,
+		wp.EpisodeRatingKey,
+		wp.SeasonNumber,
+		wp.EpisodeNumber,
+		wp.EpisodeTitle,
+		wp.CompletedAt,
+		wp.CreatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to insert watch progress: %w", err)
+	}
+
+	return nil
+}
+
+// GetLastWatchedEpisode returns the most recently watched episode for a show/user combination.
+// Returns nil if no episodes have been watched.
+func (db *DB) GetLastWatchedEpisode(ctx context.Context, plexAccountID, showRatingKey string) (*models.WatchProgress, error) {
+	var wp models.WatchProgress
+
+	err := db.conn.QueryRowContext(ctx,
+		`SELECT id, plex_account_id, plex_account_name, plex_server_id,
+			show_rating_key, episode_rating_key,
+			season_number, episode_number, episode_title,
+			completed_at, created_at
+		FROM watch_progress
+		WHERE plex_account_id = ? AND show_rating_key = ?
+		ORDER BY season_number DESC, episode_number DESC
+		LIMIT 1`,
+		plexAccountID,
+		showRatingKey,
+	).Scan(
+		&wp.ID,
+		&wp.PlexAccountID,
+		&wp.PlexAccountName,
+		&wp.PlexServerID,
+		&wp.ShowRatingKey,
+		&wp.EpisodeRatingKey,
+		&wp.SeasonNumber,
+		&wp.EpisodeNumber,
+		&wp.EpisodeTitle,
+		&wp.CompletedAt,
+		&wp.CreatedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil // No watch progress found
+		}
+		return nil, fmt.Errorf("failed to query watch progress: %w", err)
+	}
+
+	return &wp, nil
+}
+
+// GetWatchedEpisodes returns all watched episodes for a show/user combination,
+// ordered by season and episode number.
+func (db *DB) GetWatchedEpisodes(ctx context.Context, plexAccountID, showRatingKey string) ([]models.WatchProgress, error) {
+	rows, err := db.conn.QueryContext(ctx,
+		`SELECT id, plex_account_id, plex_account_name, plex_server_id,
+			show_rating_key, episode_rating_key,
+			season_number, episode_number, episode_title,
+			completed_at, created_at
+		FROM watch_progress
+		WHERE plex_account_id = ? AND show_rating_key = ?
+		ORDER BY season_number ASC, episode_number ASC`,
+		plexAccountID,
+		showRatingKey,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query watch progress: %w", err)
+	}
+	defer rows.Close()
+
+	var results []models.WatchProgress
+	for rows.Next() {
+		var wp models.WatchProgress
+		if err := rows.Scan(
+			&wp.ID,
+			&wp.PlexAccountID,
+			&wp.PlexAccountName,
+			&wp.PlexServerID,
+			&wp.ShowRatingKey,
+			&wp.EpisodeRatingKey,
+			&wp.SeasonNumber,
+			&wp.EpisodeNumber,
+			&wp.EpisodeTitle,
+			&wp.CompletedAt,
+			&wp.CreatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan watch progress: %w", err)
+		}
+		results = append(results, wp)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating watch progress rows: %w", err)
+	}
+
+	return results, nil
+}

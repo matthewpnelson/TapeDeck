@@ -24,6 +24,7 @@ type Dependencies struct {
 	GetPlayHandler        func() *handlers.PlayHandler
 	GetStatusHandler      func() *handlers.StatusHandler
 	GetWebhookHandler     func() *handlers.WebhookHandler
+	GetPlexWebhookHandler func() *handlers.PlexWebhookHandler
 
 	AuthMiddleware func(http.Handler) http.Handler
 	HandlersReady  func() bool
@@ -136,11 +137,16 @@ func New(deps *Dependencies) *chi.Mux {
 		})
 	})
 
-	// Webhook endpoint for NFC reader (unprotected, requires initialized handlers, validated via webhook secret)
+	// Webhook endpoints (unprotected, requires initialized handlers)
 	r.Group(func(r chi.Router) {
 		r.Use(requireInitialized(deps.HandlersReady))
+		// NFC reader webhook (validated via webhook secret)
 		r.Post("/api/webhook/nfc", func(w http.ResponseWriter, req *http.Request) {
 			deps.GetWebhookHandler().HandleNFCWebhook(w, req)
+		})
+		// Plex webhook for watch progress tracking (multipart form data)
+		r.Post("/api/webhook/plex", func(w http.ResponseWriter, req *http.Request) {
+			deps.GetPlexWebhookHandler().HandleWebhook(w, req)
 		})
 	})
 

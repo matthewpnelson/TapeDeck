@@ -840,6 +840,10 @@ func (m *mockPlexClient) GetNextUnwatchedEpisode(_ context.Context, _ string) (*
 	return nil, nil
 }
 
+func (m *mockPlexClient) GetChildren(_ context.Context, _ string) ([]plex.MediaMetadata, error) {
+	return nil, nil
+}
+
 func (m *mockPlexClient) GetAuthToken() string {
 	return "mock-token"
 }

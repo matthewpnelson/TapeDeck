@@ -24,6 +24,7 @@ type PlexClientInterface interface {
 	GetAllLiveTVChannels(ctx context.Context) ([]plex.MediaItem, error)
 	GetPlaylists(ctx context.Context) ([]plex.Playlist, error)
 	GetNextUnwatchedEpisode(ctx context.Context, showRatingKey string) (*plex.MediaMetadata, error)
+	GetChildren(ctx context.Context, ratingKey string) ([]plex.MediaMetadata, error)
 	GetAuthToken() string
 }
 

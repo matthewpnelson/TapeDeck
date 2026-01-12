@@ -19,6 +19,7 @@ type PlexClientFactory func(serverID string, userID int64, plexUserUUID string) 
 // PlexClient defines the Plex operations needed for playback
 type PlexClient interface {
 	GetNextUnwatchedEpisode(ctx context.Context, showRatingKey string) (*plex.MediaMetadata, error)
+	GetChildren(ctx context.Context, ratingKey string) ([]plex.MediaMetadata, error)
 	GetAuthToken() string
 }
 
@@ -33,6 +34,7 @@ type PlaybackService struct {
 type DBClient interface {
 	GetCardMappingByTagID(ctx context.Context, tagID string) (*models.CardMapping, error)
 	CreatePlaybackLog(ctx context.Context, log *models.PlaybackLog) (int64, error)
+	GetLastWatchedEpisode(ctx context.Context, plexAccountID, showRatingKey string) (*models.WatchProgress, error)
 }
 
 // HARestClient defines the HA REST operations needed for playback
@@ -114,29 +116,85 @@ func (s *PlaybackService) Play(ctx context.Context, req *PlaybackRequest) (*Play
 		return result, result.Error
 	}
 
-	// Get Plex client for user context (needed for both episode resolution and token)
-	// When PlexUserUUID is set, the factory returns a client with the switched user's token
-	var plexClient PlexClient
-	var authToken string
+	// Get Plex clients for playback
+	// We need two tokens:
+	// 1. Admin token - for API calls (managed users get 401 on direct server API)
+	// 2. Managed user token - for deep link (to set playback context)
+	var adminClient PlexClient
+	var authToken string // Token to use in deep link
+
 	if s.plexClientFactory != nil {
-		plexClient = s.plexClientFactory(req.PlexServerID, req.UserID, req.PlexUserUUID)
-		if plexClient != nil {
-			authToken = plexClient.GetAuthToken()
+		// Always get admin client for API calls (empty plexUserUUID = admin)
+		adminClient = s.plexClientFactory(req.PlexServerID, req.UserID, "")
+
+		// If a Plex Home user is specified, get their token for the deep link
+		if req.PlexUserUUID != "" {
+			managedClient := s.plexClientFactory(req.PlexServerID, req.UserID, req.PlexUserUUID)
+			if managedClient != nil {
+				authToken = managedClient.GetAuthToken()
+				logger.Info("Using managed user token for deep link",
+					"plex_user_uuid", req.PlexUserUUID)
+			}
+		}
+
+		// Fall back to admin token if no managed user token
+		if authToken == "" && adminClient != nil {
+			authToken = adminClient.GetAuthToken()
 		}
 	}
 
 	// For TV shows, resolve to the next unwatched episode
+	// For managed users, check local watch progress first (from Plex webhooks)
+	// Then fall back to admin's watch history from Plex API
 	mediaID := req.MediaID
-	if req.MediaType == "show" && plexClient != nil {
-		episode, err := plexClient.GetNextUnwatchedEpisode(ctx, req.MediaID)
-		if err != nil {
-			logger.Warn("Failed to get next episode, playing show directly",
-				"show", req.MediaTitle,
-				"error", err)
-		} else if episode != nil {
-			logger.Info("Resolved show to next episode",
-				"show", req.MediaTitle,
-				"episode", fmt.Sprintf("S%02dE%02d - %s", episode.ParentIndex, episode.Index, episode.Title))
+	if req.MediaType == "show" && adminClient != nil {
+		var episode *plex.MediaMetadata
+		var foundFromLocal bool
+
+		// For managed users, check local watch progress first
+		if req.PlexUserUUID != "" {
+			lastWatched, err := s.db.GetLastWatchedEpisode(ctx, req.PlexUserUUID, req.MediaID)
+			if err != nil {
+				logger.Warn("Failed to query local watch progress",
+					"plex_user_uuid", req.PlexUserUUID,
+					"show", req.MediaTitle,
+					"error", err)
+			} else if lastWatched != nil {
+				logger.Info("Found local watch progress for managed user",
+					"plex_user_uuid", req.PlexUserUUID,
+					"last_watched", fmt.Sprintf("S%02dE%02d", lastWatched.SeasonNumber, lastWatched.EpisodeNumber))
+
+				// Find the next episode after the last watched one
+				nextEp, err := s.findNextEpisode(ctx, adminClient, req.MediaID, lastWatched.SeasonNumber, lastWatched.EpisodeNumber)
+				if err != nil {
+					logger.Warn("Failed to find next episode from local progress",
+						"error", err)
+				} else if nextEp != nil {
+					episode = nextEp
+					foundFromLocal = true
+					logger.Info("Resolved show to next episode (from local progress)",
+						"show", req.MediaTitle,
+						"episode", fmt.Sprintf("S%02dE%02d - %s", episode.ParentIndex, episode.Index, episode.Title))
+				}
+			}
+		}
+
+		// Fall back to admin's watch history if no local progress
+		if episode == nil {
+			var err error
+			episode, err = adminClient.GetNextUnwatchedEpisode(ctx, req.MediaID)
+			if err != nil {
+				logger.Warn("Failed to get next episode, playing show directly",
+					"show", req.MediaTitle,
+					"error", err)
+			} else if episode != nil && !foundFromLocal {
+				logger.Info("Resolved show to next episode (from admin watch history)",
+					"show", req.MediaTitle,
+					"episode", fmt.Sprintf("S%02dE%02d - %s", episode.ParentIndex, episode.Index, episode.Title))
+			}
+		}
+
+		if episode != nil {
 			mediaID = episode.RatingKey
 		}
 	}
@@ -264,4 +322,71 @@ func (s *PlaybackService) logPlayback(ctx context.Context, userID int64, tagID, 
 	playbackLog := models.NewPlaybackLog(userID, tagID, mediaID, mediaTitle)
 	_, err := s.db.CreatePlaybackLog(ctx, playbackLog)
 	return err
+}
+
+// findNextEpisode finds the episode that comes after a given season/episode number.
+// Returns nil if no more episodes exist (series complete).
+func (s *PlaybackService) findNextEpisode(ctx context.Context, client PlexClient, showRatingKey string, lastSeason, lastEpisode int) (*plex.MediaMetadata, error) {
+	// Get all seasons
+	seasons, err := client.GetChildren(ctx, showRatingKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get seasons: %w", err)
+	}
+
+	// Separate regular seasons from specials, sort by index
+	var regularSeasons []plex.MediaMetadata
+	for _, s := range seasons {
+		if s.Type == "season" && s.Index > 0 {
+			regularSeasons = append(regularSeasons, s)
+		}
+	}
+
+	// Find the next episode
+	for _, season := range regularSeasons {
+		// Skip seasons before the last watched
+		if season.Index < lastSeason {
+			continue
+		}
+
+		episodes, err := client.GetChildren(ctx, season.RatingKey)
+		if err != nil {
+			logger.Warn("Failed to get episodes for season", "season", season.Index, "error", err)
+			continue
+		}
+
+		for _, ep := range episodes {
+			if ep.Type != "episode" {
+				continue
+			}
+
+			// If same season, skip episodes up to and including the last watched
+			if season.Index == lastSeason && ep.Index <= lastEpisode {
+				continue
+			}
+
+			// Found the next episode
+			return &ep, nil
+		}
+	}
+
+	// No more episodes - series complete, restart from S1E1
+	logger.Info("Series complete, restarting from beginning")
+	for _, season := range regularSeasons {
+		if season.Index != 1 {
+			continue
+		}
+
+		episodes, err := client.GetChildren(ctx, season.RatingKey)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get season 1 episodes: %w", err)
+		}
+
+		for _, ep := range episodes {
+			if ep.Type == "episode" && ep.Index == 1 {
+				return &ep, nil
+			}
+		}
+	}
+
+	return nil, nil
 }
