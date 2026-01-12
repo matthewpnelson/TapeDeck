@@ -131,6 +131,11 @@ func NewClient(serverURL, serverID, authToken string, devMode bool) *Client {
 	}
 }
 
+// GetAuthToken returns the auth token used by this client
+func (c *Client) GetAuthToken() string {
+	return c.authToken
+}
+
 // GetLibraries retrieves all library sections from the Plex server
 func (c *Client) GetLibraries(ctx context.Context) ([]Library, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.serverURL+"/library/sections", nil)

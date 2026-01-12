@@ -131,6 +131,9 @@ func New(deps *Dependencies) *chi.Mux {
 		r.Get("/api/status/ha", func(w http.ResponseWriter, req *http.Request) {
 			deps.GetStatusHandler().HAStatus(w, req)
 		})
+		r.Get("/api/plex/home-users", func(w http.ResponseWriter, req *http.Request) {
+			deps.GetMediaHandler().HomeUsers(w, req)
+		})
 	})
 
 	// Webhook endpoint for NFC reader (unprotected, requires initialized handlers, validated via webhook secret)

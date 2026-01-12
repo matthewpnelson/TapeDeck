@@ -50,8 +50,20 @@ templ pairingFormContent(appleTVs []AppleTVOption) {
 					</select>
 				</div>
 			</div>
-			<div class="step">
+			<div class="step" id="plexUserStep" style="display: none;">
 				<span class="step-number">3</span>
+				<strong style="color: var(--text-primary);">Select Plex User for Watch History</strong>
+				<p style="margin: 8px 0; font-size: 14px; color: var(--text-secondary);">
+					For TV shows, this determines which user's watch progress is tracked.
+				</p>
+				<div style="margin-top: 10px;">
+					<select id="plexUserSelect" style="padding: 12px; width: 100%; font-size: 16px; border: 2px solid var(--input-border); border-radius: 4px; background: var(--input-bg); color: var(--text-primary);">
+						<option value="">Use my account</option>
+					</select>
+				</div>
+			</div>
+			<div class="step">
+				<span class="step-number" id="tapStepNumber">3</span>
 				<strong style="color: var(--text-primary);">Tap your NFC card</strong>
 				<div class="ws-status" id="wsStatus">Checking connection...</div>
 			</div>
@@ -65,6 +77,40 @@ templ pairingFormContent(appleTVs []AppleTVOption) {
 	<script>
 		let ws = null;
 		let pairingActive = false;
+		let homeUsers = [];
+
+		// Fetch Plex Home users on page load
+		async function fetchHomeUsers() {
+			try {
+				const response = await fetch('/api/plex/home-users');
+				if (response.ok) {
+					homeUsers = await response.json();
+					if (homeUsers && homeUsers.length > 1) {
+						// Show the Plex user step if there are multiple users
+						const plexUserStep = document.getElementById('plexUserStep');
+						const tapStepNumber = document.getElementById('tapStepNumber');
+						if (plexUserStep) {
+							plexUserStep.style.display = 'block';
+							tapStepNumber.textContent = '4';
+						}
+
+						// Populate the dropdown
+						const select = document.getElementById('plexUserSelect');
+						if (select) {
+							homeUsers.forEach(user => {
+								const option = document.createElement('option');
+								option.value = user.id;
+								option.textContent = user.title + (user.restricted ? ' (Managed)' : '');
+								option.dataset.name = user.title;
+								select.appendChild(option);
+							});
+						}
+					}
+				}
+			} catch (error) {
+				console.error('Failed to fetch home users:', error);
+			}
+		}
 
 		// Connect WebSocket
 		function connectWebSocket() {
@@ -149,6 +195,7 @@ templ pairingFormContent(appleTVs []AppleTVOption) {
 			const mediaType = document.getElementById('media_type');
 			const serverID = document.getElementById('media_server_id');
 			const appleTVSelect = document.getElementById('appleTVSelect');
+			const plexUserSelect = document.getElementById('plexUserSelect');
 
 			if (!mediaId || !mediaId.value || !ws || ws.readyState !== WebSocket.OPEN) {
 				return;
@@ -166,13 +213,24 @@ templ pairingFormContent(appleTVs []AppleTVOption) {
 
 			pairingActive = true;
 
+			// Get selected Plex user info
+			let plexUserId = '';
+			let plexUserName = '';
+			if (plexUserSelect && plexUserSelect.value) {
+				plexUserId = plexUserSelect.value;
+				const selectedOption = plexUserSelect.options[plexUserSelect.selectedIndex];
+				plexUserName = selectedOption.dataset.name || selectedOption.textContent;
+			}
+
 			const msg = {
 				type: 'start_pairing',
 				media_id: mediaId.value,
 				media_title: mediaTitle.value,
 				media_type: mediaType.value,
 				server_id: serverID ? serverID.value : '',
-				apple_tv_entity: selectedAppleTV
+				apple_tv_entity: selectedAppleTV,
+				plex_user_id: plexUserId,
+				plex_user_name: plexUserName
 			};
 
 			ws.send(JSON.stringify(msg));
@@ -255,6 +313,7 @@ templ pairingFormContent(appleTVs []AppleTVOption) {
 		}
 
 		preSelectMediaFromURL();
+		fetchHomeUsers();
 		connectWebSocket();
 		setInterval(checkHAStatus, 5000);
 	</script>

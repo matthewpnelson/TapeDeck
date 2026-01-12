@@ -5,11 +5,11 @@ import "github.com/Chuntttttt/tapedeck/internal/config"
 import "fmt"
 
 // MediaDetail renders the media detail page
-templ MediaDetail(title string, mediaType string, summary string, year int, thumbnailURL string, plexWebURL string, serverID string, ratingKey string, serverName string, defaultAppleTV string, isPaired bool, appleTVs []config.AppleTV, navHTML string, bannerHTML string, bannerScript string) {
-	@layouts.AppLayout(title, navHTML, bannerHTML, bannerScript, mediaDetailContent(title, mediaType, summary, year, thumbnailURL, plexWebURL, serverID, ratingKey, serverName, defaultAppleTV, isPaired, appleTVs))
+templ MediaDetail(title string, mediaType string, summary string, year int, thumbnailURL string, plexWebURL string, serverID string, ratingKey string, serverName string, defaultAppleTV string, isPaired bool, pairedPlexUser string, appleTVs []config.AppleTV, navHTML string, bannerHTML string, bannerScript string) {
+	@layouts.AppLayout(title, navHTML, bannerHTML, bannerScript, mediaDetailContent(title, mediaType, summary, year, thumbnailURL, plexWebURL, serverID, ratingKey, serverName, defaultAppleTV, isPaired, pairedPlexUser, appleTVs))
 }
 
-templ mediaDetailContent(title string, mediaType string, summary string, year int, thumbnailURL string, plexWebURL string, serverID string, ratingKey string, serverName string, defaultAppleTV string, isPaired bool, appleTVs []config.AppleTV) {
+templ mediaDetailContent(title string, mediaType string, summary string, year int, thumbnailURL string, plexWebURL string, serverID string, ratingKey string, serverName string, defaultAppleTV string, isPaired bool, pairedPlexUser string, appleTVs []config.AppleTV) {
 	<div class="media-detail">
 		<div class="media-detail-container">
 			<div class="media-poster-column">
@@ -28,7 +28,11 @@ templ mediaDetailContent(title string, mediaType string, summary string, year in
 				}
 				<div class="media-actions">
 					if isPaired {
-						<button class="btn btn-paired" disabled>📱 Paired to Card</button>
+						if pairedPlexUser != "" {
+							<button class="btn btn-paired" disabled>📱 Paired to Card ({ pairedPlexUser })</button>
+						} else {
+							<button class="btn btn-paired" disabled>📱 Paired to Card</button>
+						}
 					} else {
 						<button class="btn btn-primary btn-pair" onclick={ templ.ComponentScript{Call: fmt.Sprintf("openPairingModal('%s', '%s', '%s', '%s')", serverID, ratingKey, title, mediaType)} }>📱 Pair to Card</button>
 					}

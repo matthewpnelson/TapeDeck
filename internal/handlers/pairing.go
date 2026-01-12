@@ -59,6 +59,8 @@ type pairingClient struct {
 	mediaTitle    string
 	plexServerID  string // Selected Plex server ID
 	appleTVEntity string // Selected Apple TV entity
+	plexUserID    string // Optional: Plex Home user ID for watch history
+	plexUserName  string // Optional: Plex Home user display name
 }
 
 // NewPairingHandler creates a new pairing handler
@@ -261,7 +263,15 @@ func (h *PairingHandler) readPump(client *pairingClient) {
 			client.plexServerID = serverID
 			client.appleTVEntity = appleTVEntity
 
-			logger.Info("Client ready for pairing", "user_id", client.userID, "media", mediaTitle, "server", serverID, "apple_tv", appleTVEntity)
+			// Optional: Plex Home user for watch history
+			if plexUserID, ok := msg["plex_user_id"].(string); ok {
+				client.plexUserID = plexUserID
+			}
+			if plexUserName, ok := msg["plex_user_name"].(string); ok {
+				client.plexUserName = plexUserName
+			}
+
+			logger.Info("Client ready for pairing", "user_id", client.userID, "media", mediaTitle, "server", serverID, "apple_tv", appleTVEntity, "plex_user", client.plexUserName)
 		}
 	}
 }
@@ -364,6 +374,10 @@ func (h *PairingHandler) handleTagScannedInternal(ctx context.Context, tagID str
 			client.plexServerID,
 			client.appleTVEntity,
 		)
+		// Set optional Plex Home user fields
+		mapping.PlexUserUUID = client.plexUserID
+		mapping.PlexUserName = client.plexUserName
+
 		mappingID, err := h.db.CreateCardMapping(ctx, mapping)
 		if err != nil {
 			// Handle race condition where tag was mapped between our check and insertion

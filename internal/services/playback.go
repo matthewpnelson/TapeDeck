@@ -13,11 +13,13 @@ import (
 )
 
 // PlexClientFactory creates a Plex client for a specific server and user
-type PlexClientFactory func(serverID string, userID int64) PlexClient
+// If plexUserUUID is provided, the factory should switch to that Plex Home user's context
+type PlexClientFactory func(serverID string, userID int64, plexUserUUID string) PlexClient
 
 // PlexClient defines the Plex operations needed for playback
 type PlexClient interface {
 	GetNextUnwatchedEpisode(ctx context.Context, showRatingKey string) (*plex.MediaMetadata, error)
+	GetAuthToken() string
 }
 
 // PlaybackService handles media playback orchestration
@@ -50,6 +52,7 @@ type PlaybackRequest struct {
 	MediaTitle    string
 	PlexServerID  string
 	AppleTVEntity string
+	PlexUserUUID  string // Optional: Plex Home user UUID for watch history
 }
 
 // PlaybackResult contains the outcome of a playback request
@@ -94,6 +97,7 @@ func (s *PlaybackService) PlayByTagID(ctx context.Context, tagID string) (*Playb
 		MediaTitle:    mapping.MediaTitle,
 		PlexServerID:  mapping.PlexServerID,
 		AppleTVEntity: mapping.AppleTVEntity,
+		PlexUserUUID:  mapping.PlexUserUUID,
 	})
 }
 
@@ -110,44 +114,71 @@ func (s *PlaybackService) Play(ctx context.Context, req *PlaybackRequest) (*Play
 		return result, result.Error
 	}
 
+	// Get Plex client for user context (needed for both episode resolution and token)
+	// When PlexUserUUID is set, the factory returns a client with the switched user's token
+	var plexClient PlexClient
+	var authToken string
+	if s.plexClientFactory != nil {
+		plexClient = s.plexClientFactory(req.PlexServerID, req.UserID, req.PlexUserUUID)
+		if plexClient != nil {
+			authToken = plexClient.GetAuthToken()
+		}
+	}
+
 	// For TV shows, resolve to the next unwatched episode
 	mediaID := req.MediaID
-	if req.MediaType == "show" && s.plexClientFactory != nil {
-		plexClient := s.plexClientFactory(req.PlexServerID, req.UserID)
-		if plexClient != nil {
-			episode, err := plexClient.GetNextUnwatchedEpisode(ctx, req.MediaID)
-			if err != nil {
-				logger.Warn("Failed to get next episode, playing show directly",
-					"show", req.MediaTitle,
-					"error", err)
-			} else if episode != nil {
-				logger.Info("Resolved show to next episode",
-					"show", req.MediaTitle,
-					"episode", fmt.Sprintf("S%02dE%02d - %s", episode.ParentIndex, episode.Index, episode.Title))
-				mediaID = episode.RatingKey
-			}
+	if req.MediaType == "show" && plexClient != nil {
+		episode, err := plexClient.GetNextUnwatchedEpisode(ctx, req.MediaID)
+		if err != nil {
+			logger.Warn("Failed to get next episode, playing show directly",
+				"show", req.MediaTitle,
+				"error", err)
+		} else if episode != nil {
+			logger.Info("Resolved show to next episode",
+				"show", req.MediaTitle,
+				"episode", fmt.Sprintf("S%02dE%02d - %s", episode.ParentIndex, episode.Index, episode.Title))
+			mediaID = episode.RatingKey
 		}
 	}
 
 	// Build Plex deep link based on media type
+	// Include X-Plex-Token to ensure playback uses the correct user context
 	var plexURL string
 	if req.MediaType == "playlist" {
 		// Playlist deep link with shuffle parameter
-		plexURL = fmt.Sprintf(
-			"plex://play/?metadataKey=/playlists/%s&server=%s&shuffle=1",
-			mediaID,
-			req.PlexServerID,
-		)
+		if authToken != "" {
+			plexURL = fmt.Sprintf(
+				"plex://play/?metadataKey=/playlists/%s&server=%s&shuffle=1&X-Plex-Token=%s",
+				mediaID,
+				req.PlexServerID,
+				authToken,
+			)
+		} else {
+			plexURL = fmt.Sprintf(
+				"plex://play/?metadataKey=/playlists/%s&server=%s&shuffle=1",
+				mediaID,
+				req.PlexServerID,
+			)
+		}
 		logger.Info("Built playlist deep link with shuffle", "url", plexURL)
 	} else {
 		// Regular library content (movie, show, episode, etc.)
 		// For shows, mediaID has been resolved to the next episode's ratingKey
-		plexURL = fmt.Sprintf(
-			"plex://play/?metadataKey=/library/metadata/%s&server=%s",
-			mediaID,
-			req.PlexServerID,
-		)
-		logger.Info("Built library content deep link", "url", plexURL)
+		if authToken != "" {
+			plexURL = fmt.Sprintf(
+				"plex://play/?metadataKey=/library/metadata/%s&server=%s&X-Plex-Token=%s",
+				mediaID,
+				req.PlexServerID,
+				authToken,
+			)
+		} else {
+			plexURL = fmt.Sprintf(
+				"plex://play/?metadataKey=/library/metadata/%s&server=%s",
+				mediaID,
+				req.PlexServerID,
+			)
+		}
+		logger.Info("Built library content deep link", "url", plexURL, "has_token", authToken != "")
 	}
 
 	// Check Apple TV state

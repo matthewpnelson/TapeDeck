@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -167,4 +168,109 @@ func (c *AuthClient) GetAuthURL(pinCode, forwardURL string) string {
 	}
 
 	return fmt.Sprintf("https://app.plex.tv/auth#!?%s", params.Encode())
+}
+
+// HomeUser represents a Plex Home user (regular or managed/restricted)
+type HomeUser struct {
+	ID         string `xml:"id,attr"`
+	UUID       string `xml:"uuid,attr"`
+	Title      string `xml:"title,attr"`
+	Username   string `xml:"username,attr"`
+	Email      string `xml:"email,attr"`
+	Thumb      string `xml:"thumb,attr"`
+	Restricted bool   `xml:"restricted,attr"` // true = managed user (child account)
+	Admin      bool   `xml:"admin,attr"`
+	Guest      bool   `xml:"guest,attr"`
+	Protected  bool   `xml:"protected,attr"` // true = user has a PIN
+}
+
+// homeUsersResponse represents the XML response from GET /api/v2/home/users
+type homeUsersResponse struct {
+	XMLName xml.Name   `xml:"home"`
+	Users   []HomeUser `xml:"users>user"`
+}
+
+// switchUserResponse represents the XML response from POST /api/home/users/{id}/switch
+type switchUserResponse struct {
+	XMLName             xml.Name `xml:"user"`
+	AuthenticationToken string   `xml:"authenticationToken,attr"`
+}
+
+// GetHomeUsers fetches all users in the Plex Home
+// This returns both regular users and managed/restricted users (child accounts)
+func (c *AuthClient) GetHomeUsers(ctx context.Context, authToken string) ([]HomeUser, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/api/v2/home/users", nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("X-Plex-Token", authToken)
+	req.Header.Set("X-Plex-Client-Identifier", c.clientID)
+	req.Header.Set("X-Plex-Product", c.productName)
+	req.Header.Set("Accept", "application/xml")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to make request: %w", err)
+	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			logger.Warn("Failed to close response body", "error", err)
+		}
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
+
+	var homeResp homeUsersResponse
+	if err := xml.NewDecoder(resp.Body).Decode(&homeResp); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	logger.Info("Fetched Plex Home users", "count", len(homeResp.Users))
+	return homeResp.Users, nil
+}
+
+// SwitchHomeUser switches to a specific Plex Home user and returns their auth token
+// This allows making API calls in the context of that user (e.g., to see their watch history)
+// The userID parameter is the numeric user ID (not UUID)
+func (c *AuthClient) SwitchHomeUser(ctx context.Context, adminToken, userID string) (string, error) {
+	switchURL := fmt.Sprintf("%s/api/home/users/%s/switch", c.baseURL, userID)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, switchURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("X-Plex-Token", adminToken)
+	req.Header.Set("X-Plex-Client-Identifier", c.clientID)
+	req.Header.Set("X-Plex-Product", c.productName)
+	req.Header.Set("Accept", "application/xml")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to make request: %w", err)
+	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			logger.Warn("Failed to close response body", "error", err)
+		}
+	}()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		return "", fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
+
+	var switchResp switchUserResponse
+	if err := xml.NewDecoder(resp.Body).Decode(&switchResp); err != nil {
+		return "", fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	if switchResp.AuthenticationToken == "" {
+		return "", fmt.Errorf("no authentication token in response")
+	}
+
+	logger.Info("Switched to Plex Home user", "user_id", userID)
+	return switchResp.AuthenticationToken, nil
 }

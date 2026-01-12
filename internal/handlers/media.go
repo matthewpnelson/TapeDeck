@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 
@@ -23,6 +24,7 @@ type PlexClientInterface interface {
 	GetAllLiveTVChannels(ctx context.Context) ([]plex.MediaItem, error)
 	GetPlaylists(ctx context.Context) ([]plex.Playlist, error)
 	GetNextUnwatchedEpisode(ctx context.Context, showRatingKey string) (*plex.MediaMetadata, error)
+	GetAuthToken() string
 }
 
 // PlexClientFactory creates a new Plex client
@@ -42,10 +44,11 @@ type MediaHandler struct {
 	servers       []ServerInfo
 	devMode       bool
 	newPlexClient PlexClientFactory
+	authClient    *plex.AuthClient // For home user operations
 }
 
 // NewMediaHandler creates a new media handler
-func NewMediaHandler(store *sessions.CookieStore, database *db.DB, servers []ServerInfo, devMode bool) *MediaHandler {
+func NewMediaHandler(store *sessions.CookieStore, database *db.DB, servers []ServerInfo, devMode bool, authClient *plex.AuthClient) *MediaHandler {
 	return &MediaHandler{
 		sessionStore: store,
 		db:           database,
@@ -54,6 +57,7 @@ func NewMediaHandler(store *sessions.CookieStore, database *db.DB, servers []Ser
 		newPlexClient: func(serverURL, serverID, authToken string, devMode bool) PlexClientInterface {
 			return plex.NewClient(serverURL, serverID, authToken, devMode)
 		},
+		authClient: authClient,
 	}
 }
 
@@ -567,5 +571,88 @@ func (h *MediaHandler) Playlists(w http.ResponseWriter, r *http.Request) {
 	if err := pages.MediaPlaylists(playlists, selectedServer.ID, NavigationHTML(), ConnectionBannerHTML(), ConnectionBannerScript()).Render(ctx, w); err != nil {
 		log.Error("Failed to render template", "error", err)
 		RespondError(w, r, "Failed to render page", http.StatusInternalServerError)
+	}
+}
+
+// HomeUsersResponse represents a Plex Home user in the API response
+type HomeUsersResponse struct {
+	ID         string `json:"id"`
+	Title      string `json:"title"`
+	Thumb      string `json:"thumb"`
+	Restricted bool   `json:"restricted"` // true = managed user (child account)
+	Protected  bool   `json:"protected"`  // true = user has a PIN
+}
+
+// HomeUsers handles GET /api/plex/home-users
+// Returns the list of Plex Home users for the authenticated user
+func (h *MediaHandler) HomeUsers(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	log := middleware.GetLogger(ctx)
+
+	// Get user from context
+	userID, ok := middleware.GetUserIDFromContext(ctx)
+	if !ok {
+		RespondErrorJSON(w, "Not authenticated", http.StatusUnauthorized)
+		return
+	}
+
+	// Get user from database to retrieve auth token
+	user, err := h.db.GetUserByID(ctx, userID)
+	if err != nil {
+		log.Error("Failed to get user", "error", err)
+		RespondErrorJSON(w, "Failed to get user", http.StatusInternalServerError)
+		return
+	}
+
+	// Check if auth client is available
+	if h.authClient == nil {
+		log.Error("Auth client not configured")
+		RespondErrorJSON(w, "Auth client not configured", http.StatusInternalServerError)
+		return
+	}
+
+	// Fetch home users from Plex
+	homeUsers, err := h.authClient.GetHomeUsers(ctx, user.PlexAuthToken)
+	if err != nil {
+		log.Warn("Failed to get home users", "error", err)
+		// Return empty list instead of error - user may not be part of a Plex Home
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode([]HomeUsersResponse{}); err != nil {
+			log.Error("Failed to encode response", "error", err)
+		}
+		return
+	}
+
+	// Convert to response format, filtering out users with PINs (for v1)
+	var response []HomeUsersResponse
+	for _, hu := range homeUsers {
+		// Skip users with PINs since we don't support PIN entry yet
+		if hu.Protected {
+			continue
+		}
+		response = append(response, HomeUsersResponse{
+			ID:         hu.ID,
+			Title:      hu.Title,
+			Thumb:      hu.Thumb,
+			Restricted: hu.Restricted,
+			Protected:  hu.Protected,
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		log.Error("Failed to encode response", "error", err)
+		RespondErrorJSON(w, "Failed to encode response", http.StatusInternalServerError)
+	}
+}
+
+// RespondErrorJSON sends an error response as JSON
+func RespondErrorJSON(w http.ResponseWriter, message string, statusCode int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	response := map[string]string{"error": message}
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		// If we can't encode the error, just log it
+		return
 	}
 }

@@ -226,9 +226,18 @@ func (db *DB) CreateCardMapping(ctx context.Context, mapping *models.CardMapping
 		return 0, fmt.Errorf("invalid card mapping: %w", err)
 	}
 
+	// Use sql.NullString for optional plex user fields
+	var plexUserUUID, plexUserName sql.NullString
+	if mapping.PlexUserUUID != "" {
+		plexUserUUID = sql.NullString{String: mapping.PlexUserUUID, Valid: true}
+	}
+	if mapping.PlexUserName != "" {
+		plexUserName = sql.NullString{String: mapping.PlexUserName, Valid: true}
+	}
+
 	result, err := db.conn.ExecContext(ctx,
-		`INSERT INTO card_mappings (user_id, tag_id, media_type, media_id, media_title, plex_server_id, apple_tv_entity, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO card_mappings (user_id, tag_id, media_type, media_id, media_title, plex_server_id, apple_tv_entity, plex_user_uuid, plex_user_name, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		mapping.UserID,
 		mapping.TagID,
 		mapping.MediaType,
@@ -236,6 +245,8 @@ func (db *DB) CreateCardMapping(ctx context.Context, mapping *models.CardMapping
 		mapping.MediaTitle,
 		mapping.PlexServerID,
 		mapping.AppleTVEntity,
+		plexUserUUID,
+		plexUserName,
 		mapping.CreatedAt,
 		mapping.UpdatedAt,
 	)
@@ -258,7 +269,7 @@ func (db *DB) CreateCardMapping(ctx context.Context, mapping *models.CardMapping
 // GetCardMappingsByUserID retrieves all card mappings for a user
 func (db *DB) GetCardMappingsByUserID(ctx context.Context, userID int64) ([]*models.CardMapping, error) {
 	rows, err := db.conn.QueryContext(ctx,
-		`SELECT id, user_id, tag_id, media_type, media_id, media_title, plex_server_id, apple_tv_entity, thumbnail_url, created_at, updated_at
+		`SELECT id, user_id, tag_id, media_type, media_id, media_title, plex_server_id, apple_tv_entity, thumbnail_url, plex_user_uuid, plex_user_name, created_at, updated_at
 		FROM card_mappings WHERE user_id = ? ORDER BY created_at DESC`,
 		userID,
 	)
@@ -274,7 +285,7 @@ func (db *DB) GetCardMappingsByUserID(ctx context.Context, userID int64) ([]*mod
 	var mappings []*models.CardMapping
 	for rows.Next() {
 		mapping := &models.CardMapping{}
-		var thumbnailURL sql.NullString
+		var thumbnailURL, plexUserUUID, plexUserName sql.NullString
 		err := rows.Scan(
 			&mapping.ID,
 			&mapping.UserID,
@@ -285,6 +296,8 @@ func (db *DB) GetCardMappingsByUserID(ctx context.Context, userID int64) ([]*mod
 			&mapping.PlexServerID,
 			&mapping.AppleTVEntity,
 			&thumbnailURL,
+			&plexUserUUID,
+			&plexUserName,
 			&mapping.CreatedAt,
 			&mapping.UpdatedAt,
 		)
@@ -293,6 +306,12 @@ func (db *DB) GetCardMappingsByUserID(ctx context.Context, userID int64) ([]*mod
 		}
 		if thumbnailURL.Valid {
 			mapping.ThumbnailURL = thumbnailURL.String
+		}
+		if plexUserUUID.Valid {
+			mapping.PlexUserUUID = plexUserUUID.String
+		}
+		if plexUserName.Valid {
+			mapping.PlexUserName = plexUserName.String
 		}
 		mappings = append(mappings, mapping)
 	}
@@ -307,9 +326,9 @@ func (db *DB) GetCardMappingsByUserID(ctx context.Context, userID int64) ([]*mod
 // GetCardMappingByID retrieves a card mapping by its ID
 func (db *DB) GetCardMappingByID(ctx context.Context, id int64) (*models.CardMapping, error) {
 	mapping := &models.CardMapping{}
-	var thumbnailURL sql.NullString
+	var thumbnailURL, plexUserUUID, plexUserName sql.NullString
 	err := db.conn.QueryRowContext(ctx,
-		`SELECT id, user_id, tag_id, media_type, media_id, media_title, plex_server_id, apple_tv_entity, thumbnail_url, created_at, updated_at
+		`SELECT id, user_id, tag_id, media_type, media_id, media_title, plex_server_id, apple_tv_entity, thumbnail_url, plex_user_uuid, plex_user_name, created_at, updated_at
 		FROM card_mappings WHERE id = ?`,
 		id,
 	).Scan(
@@ -322,6 +341,8 @@ func (db *DB) GetCardMappingByID(ctx context.Context, id int64) (*models.CardMap
 		&mapping.PlexServerID,
 		&mapping.AppleTVEntity,
 		&thumbnailURL,
+		&plexUserUUID,
+		&plexUserName,
 		&mapping.CreatedAt,
 		&mapping.UpdatedAt,
 	)
@@ -334,6 +355,12 @@ func (db *DB) GetCardMappingByID(ctx context.Context, id int64) (*models.CardMap
 	if thumbnailURL.Valid {
 		mapping.ThumbnailURL = thumbnailURL.String
 	}
+	if plexUserUUID.Valid {
+		mapping.PlexUserUUID = plexUserUUID.String
+	}
+	if plexUserName.Valid {
+		mapping.PlexUserName = plexUserName.String
+	}
 
 	return mapping, nil
 }
@@ -344,8 +371,17 @@ func (db *DB) UpdateCardMapping(ctx context.Context, mapping *models.CardMapping
 		return fmt.Errorf("invalid card mapping: %w", err)
 	}
 
+	// Use sql.NullString for optional plex user fields
+	var plexUserUUID, plexUserName sql.NullString
+	if mapping.PlexUserUUID != "" {
+		plexUserUUID = sql.NullString{String: mapping.PlexUserUUID, Valid: true}
+	}
+	if mapping.PlexUserName != "" {
+		plexUserName = sql.NullString{String: mapping.PlexUserName, Valid: true}
+	}
+
 	_, err := db.conn.ExecContext(ctx,
-		`UPDATE card_mappings SET tag_id = ?, media_type = ?, media_id = ?, media_title = ?, plex_server_id = ?, apple_tv_entity = ?, updated_at = ?
+		`UPDATE card_mappings SET tag_id = ?, media_type = ?, media_id = ?, media_title = ?, plex_server_id = ?, apple_tv_entity = ?, plex_user_uuid = ?, plex_user_name = ?, updated_at = ?
 		WHERE id = ?`,
 		mapping.TagID,
 		mapping.MediaType,
@@ -353,6 +389,8 @@ func (db *DB) UpdateCardMapping(ctx context.Context, mapping *models.CardMapping
 		mapping.MediaTitle,
 		mapping.PlexServerID,
 		mapping.AppleTVEntity,
+		plexUserUUID,
+		plexUserName,
 		mapping.UpdatedAt,
 		mapping.ID,
 	)
@@ -397,9 +435,9 @@ func (db *DB) UpdateThumbnailURL(ctx context.Context, mappingID int64, thumbnail
 // each tag_id is guaranteed to be globally unique.
 func (db *DB) GetCardMappingByTagID(ctx context.Context, tagID string) (*models.CardMapping, error) {
 	mapping := &models.CardMapping{}
-	var thumbnailURL sql.NullString
+	var thumbnailURL, plexUserUUID, plexUserName sql.NullString
 	err := db.conn.QueryRowContext(ctx,
-		`SELECT id, user_id, tag_id, media_type, media_id, media_title, plex_server_id, apple_tv_entity, thumbnail_url, created_at, updated_at
+		`SELECT id, user_id, tag_id, media_type, media_id, media_title, plex_server_id, apple_tv_entity, thumbnail_url, plex_user_uuid, plex_user_name, created_at, updated_at
 		FROM card_mappings WHERE tag_id = ?`,
 		tagID,
 	).Scan(
@@ -412,6 +450,8 @@ func (db *DB) GetCardMappingByTagID(ctx context.Context, tagID string) (*models.
 		&mapping.PlexServerID,
 		&mapping.AppleTVEntity,
 		&thumbnailURL,
+		&plexUserUUID,
+		&plexUserName,
 		&mapping.CreatedAt,
 		&mapping.UpdatedAt,
 	)
@@ -423,6 +463,12 @@ func (db *DB) GetCardMappingByTagID(ctx context.Context, tagID string) (*models.
 	}
 	if thumbnailURL.Valid {
 		mapping.ThumbnailURL = thumbnailURL.String
+	}
+	if plexUserUUID.Valid {
+		mapping.PlexUserUUID = plexUserUUID.String
+	}
+	if plexUserName.Valid {
+		mapping.PlexUserName = plexUserName.String
 	}
 
 	return mapping, nil

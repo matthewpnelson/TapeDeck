@@ -134,8 +134,14 @@ func (h *MediaDetailHandler) Detail(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Get Plex user name if mapped
+	var pairedPlexUser string
+	if existingMapping != nil {
+		pairedPlexUser = existingMapping.PlexUserName
+	}
+
 	// Render using templ template
-	if err := pages.MediaDetail(metadata.Title, metadata.Type, metadata.Summary, metadata.Year, thumbnailURL, plexWebURL, serverID, ratingKey, serverName, defaultAppleTV, existingMapping != nil, h.appleTVs, NavigationHTML(), ConnectionBannerHTML(), ConnectionBannerScript()).Render(ctx, w); err != nil {
+	if err := pages.MediaDetail(metadata.Title, metadata.Type, metadata.Summary, metadata.Year, thumbnailURL, plexWebURL, serverID, ratingKey, serverName, defaultAppleTV, existingMapping != nil, pairedPlexUser, h.appleTVs, NavigationHTML(), ConnectionBannerHTML(), ConnectionBannerScript()).Render(ctx, w); err != nil {
 		log.Error("Failed to render template", "error", err)
 		RespondError(w, r, "Failed to render page", http.StatusInternalServerError)
 	}

@@ -17,6 +17,8 @@ type CardMapping struct {
 	PlexServerID  string
 	AppleTVEntity string
 	ThumbnailURL  string // Cached Plex poster URL
+	PlexUserUUID  string // Optional: Plex Home user UUID for watch history
+	PlexUserName  string // Optional: Plex Home user display name
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
 }

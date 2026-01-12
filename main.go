@@ -211,7 +211,7 @@ func main() {
 		}
 
 		// Initialize handlers
-		mediaHandler = handlers.NewMediaHandler(sessionStore, database, servers, cfg.DevMode)
+		mediaHandler = handlers.NewMediaHandler(sessionStore, database, servers, cfg.DevMode, plexAuth)
 		mediaDetailHandler = handlers.NewMediaDetailHandler(sessionStore, database, servers, cfg.DevMode, runtimeCfg.AppleTVs)
 		mappingsHandler = handlers.NewMappingsHandler(sessionStore, database, servers, cfg.DevMode)
 		playbackHandler = handlers.NewPlaybackHandler(database, plexServerID)
@@ -228,7 +228,8 @@ func main() {
 
 		// Create Plex client factory for PlaybackService
 		// This allows the service to create Plex clients for any server on demand
-		plexClientFactory := func(serverID string, userID int64) services.PlexClient {
+		// plexUserUUID is optional - if provided, switches to that Plex Home user's context
+		plexClientFactory := func(serverID string, userID int64, plexUserUUID string) services.PlexClient {
 			// Find the server in our list
 			for _, srv := range servers {
 				if srv.ID == serverID && len(srv.URLs) > 0 {
@@ -239,7 +240,25 @@ func main() {
 						logger.Warn("Failed to get user for Plex client", "user_id", userID, "error", err)
 						return nil
 					}
-					return plex.NewClient(srv.URLs[0], srv.ID, user.PlexAuthToken, cfg.DevMode)
+
+					authToken := user.PlexAuthToken
+
+					// If a Plex Home user UUID is specified, switch to that user's context
+					if plexUserUUID != "" {
+						switchedToken, err := plexAuth.SwitchHomeUser(plexCtx, user.PlexAuthToken, plexUserUUID)
+						if err != nil {
+							logger.Warn("Failed to switch to Plex Home user, using admin token",
+								"user_uuid", plexUserUUID,
+								"error", err)
+							// Continue with admin token as fallback
+						} else {
+							logger.Debug("Switched to Plex Home user",
+								"user_uuid", plexUserUUID)
+							authToken = switchedToken
+						}
+					}
+
+					return plex.NewClient(srv.URLs[0], srv.ID, authToken, cfg.DevMode)
 				}
 			}
 			logger.Warn("Server not found for Plex client factory", "server_id", serverID)
