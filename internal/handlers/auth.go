@@ -60,36 +60,21 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Check if we already have a PIN in the session (avoid generating multiple PINs)
-	var pin *plex.PINResponse
-	if existingPinID, ok := session.Values["plex_pin_id"].(int); ok {
-		if existingPinCode, ok := session.Values["plex_pin_code"].(string); ok {
-			// Reuse existing PIN from session
-			pin = &plex.PINResponse{
-				ID:   existingPinID,
-				Code: existingPinCode,
-			}
-		}
+	// Always request a fresh PIN to avoid showing expired codes after server restarts
+	pin, err := h.plexAuth.RequestPIN(ctx)
+	if err != nil {
+		log.Error("Failed to request PIN", "error", err)
+		RespondError(w, r, "Failed to initiate Plex authentication", http.StatusInternalServerError)
+		return
 	}
 
-	// If no existing PIN, request a new one from Plex
-	if pin == nil {
-		var err error
-		pin, err = h.plexAuth.RequestPIN(ctx)
-		if err != nil {
-			log.Error("Failed to request PIN", "error", err)
-			RespondError(w, r, "Failed to initiate Plex authentication", http.StatusInternalServerError)
-			return
-		}
-
-		// Store PIN ID in session for callback
-		session.Values["plex_pin_id"] = pin.ID
-		session.Values["plex_pin_code"] = pin.Code
-		if err := session.Save(r, w); err != nil {
-			log.Error("Failed to save session", "error", err)
-			RespondError(w, r, "Session error", http.StatusInternalServerError)
-			return
-		}
+	// Store PIN ID in session for polling
+	session.Values["plex_pin_id"] = pin.ID
+	session.Values["plex_pin_code"] = pin.Code
+	if err := session.Save(r, w); err != nil {
+		log.Error("Failed to save session", "error", err)
+		RespondError(w, r, "Session error", http.StatusInternalServerError)
+		return
 	}
 
 	// Render login page with polling
