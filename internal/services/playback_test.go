@@ -49,6 +49,10 @@ func (m *mockDB) GetLastWatchedEpisode(_ context.Context, _, _ string) (*models.
 	return nil, nil
 }
 
+func (m *mockDB) DeleteWatchProgressForShow(_ context.Context, _, _ string) error {
+	return nil
+}
+
 // mockHARestClient implements HARestClient interface
 type mockHARestClient struct {
 	getStateFunc  func(ctx context.Context, entityID string) (string, error)

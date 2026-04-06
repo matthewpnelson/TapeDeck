@@ -681,3 +681,16 @@ func (db *DB) GetWatchedEpisodes(ctx context.Context, plexAccountID, showRatingK
 
 	return results, nil
 }
+
+// DeleteWatchProgressForShow removes all watch progress records for a user/show combination.
+// Used when a series is fully watched to reset history so it can start fresh.
+func (db *DB) DeleteWatchProgressForShow(ctx context.Context, plexAccountID, showRatingKey string) error {
+	_, err := db.conn.ExecContext(ctx,
+		`DELETE FROM watch_progress WHERE plex_account_id = ? AND show_rating_key = ?`,
+		plexAccountID, showRatingKey,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to delete watch progress: %w", err)
+	}
+	return nil
+}

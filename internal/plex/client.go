@@ -517,6 +517,8 @@ func (c *Client) GetNextUnwatchedEpisode(ctx context.Context, showRatingKey stri
 
 	// Track the first episode for fallback (when all are watched)
 	var firstEpisode *MediaMetadata
+	// Collect all watched episode rating keys for potential unscrobble
+	var watchedRatingKeys []string
 
 	// Check each season in order
 	for _, season := range regularSeasons {
@@ -563,6 +565,9 @@ func (c *Client) GetNextUnwatchedEpisode(ctx context.Context, showRatingKey stri
 					"title", ep.Title)
 				return ep, nil
 			}
+
+			// Track watched episode for potential unscrobble
+			watchedRatingKeys = append(watchedRatingKeys, ep.RatingKey)
 		}
 	}
 
@@ -585,16 +590,53 @@ func (c *Client) GetNextUnwatchedEpisode(ctx context.Context, showRatingKey stri
 		}
 	}
 
-	// All episodes watched - return first episode to restart series
+	// All episodes watched - unscrobble all and restart series fresh
 	if firstEpisode != nil {
-		logger.Info("All episodes watched, restarting series",
-			"season", firstEpisode.ParentIndex,
-			"episode", firstEpisode.Index,
-			"title", firstEpisode.Title)
+		logger.Info("All episodes watched, wiping Plex watch history and restarting series",
+			"show", showRatingKey,
+			"episodes_to_unscrobble", len(watchedRatingKeys))
+
+		for _, rk := range watchedRatingKeys {
+			if err := c.MarkEpisodeUnwatched(ctx, rk); err != nil {
+				logger.Warn("Failed to unscrobble episode", "rating_key", rk, "error", err)
+			}
+		}
+
 		return firstEpisode, nil
 	}
 
 	return nil, fmt.Errorf("no episodes found for show %s", showRatingKey)
+}
+
+// MarkEpisodeUnwatched marks an episode as unwatched in Plex by calling the unscrobble API.
+// This resets the viewCount to 0.
+func (c *Client) MarkEpisodeUnwatched(ctx context.Context, ratingKey string) error {
+	unscrobbleURL := fmt.Sprintf("%s/:/unscrobble?identifier=com.plexapp.plugins.library&key=%s",
+		c.serverURL, url.QueryEscape(ratingKey))
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, unscrobbleURL, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create unscrobble request: %w", err)
+	}
+
+	req.Header.Set("X-Plex-Token", c.authToken)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to unscrobble episode: %w", err)
+	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			logger.Warn("Failed to close response body", "error", err)
+		}
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		return &APIError{StatusCode: resp.StatusCode, Message: "unscrobble failed"}
+	}
+
+	return nil
 }
 
 // GetDVRs retrieves all Live TV DVR devices from the Plex server
