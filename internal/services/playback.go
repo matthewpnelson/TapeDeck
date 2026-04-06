@@ -28,6 +28,7 @@ type PlaybackService struct {
 	db                DBClient
 	haRest            HARestClient
 	plexClientFactory PlexClientFactory
+	wakeTime          time.Duration
 }
 
 // DBClient defines the database operations needed for playback
@@ -74,6 +75,7 @@ func NewPlaybackService(database DBClient, haRest HARestClient, plexFactory Plex
 		db:                database,
 		haRest:            haRest,
 		plexClientFactory: plexFactory,
+		wakeTime:          constants.AppleTVWakeTime,
 	}
 }
 
@@ -166,34 +168,26 @@ func (s *PlaybackService) Play(ctx context.Context, req *PlaybackRequest) (*Play
 					"last_watched", fmt.Sprintf("S%02dE%02d", lastWatched.SeasonNumber, lastWatched.EpisodeNumber))
 
 				// Find the next episode after the last watched one
-				nextEp, err := s.findNextEpisode(ctx, adminClient, req.MediaID, lastWatched.SeasonNumber, lastWatched.EpisodeNumber)
+				nextEp, restarted, err := s.findNextEpisode(ctx, adminClient, req.MediaID, lastWatched.SeasonNumber, lastWatched.EpisodeNumber)
 				if err != nil {
 					logger.Warn("Failed to find next episode from local progress",
 						"error", err)
 				} else if nextEp != nil {
 					episode = nextEp
 					foundFromLocal = true
-					logger.Info("Resolved show to next episode (from local progress)",
-						"show", req.MediaTitle,
-						"episode", fmt.Sprintf("S%02dE%02d - %s", episode.ParentIndex, episode.Index, episode.Title))
-				} else {
-					// Series complete - wipe local watch history and restart fresh
-					logger.Info("Series complete for managed user, wiping local watch history",
-						"plex_user_uuid", req.PlexUserUUID,
-						"show", req.MediaTitle)
 
-					if delErr := s.db.DeleteWatchProgressForShow(ctx, req.PlexUserUUID, req.MediaID); delErr != nil {
-						logger.Warn("Failed to delete watch progress", "error", delErr)
-					}
+					if restarted {
+						// Series complete - wipe local watch history and restart fresh
+						logger.Info("Series complete for managed user, wiping local watch history and restarting",
+							"plex_user_uuid", req.PlexUserUUID,
+							"show", req.MediaTitle,
+							"episode", fmt.Sprintf("S%02dE%02d - %s", episode.ParentIndex, episode.Index, episode.Title))
 
-					// Get the first episode (pass 0,0 to skip nothing)
-					nextEp, err = s.findNextEpisode(ctx, adminClient, req.MediaID, 0, 0)
-					if err != nil {
-						logger.Warn("Failed to find first episode after history wipe", "error", err)
-					} else if nextEp != nil {
-						episode = nextEp
-						foundFromLocal = true
-						logger.Info("Restarting series from beginning",
+						if delErr := s.db.DeleteWatchProgressForShow(ctx, req.PlexUserUUID, req.MediaID); delErr != nil {
+							logger.Warn("Failed to delete watch progress", "error", delErr)
+						}
+					} else {
+						logger.Info("Resolved show to next episode (from local progress)",
 							"show", req.MediaTitle,
 							"episode", fmt.Sprintf("S%02dE%02d - %s", episode.ParentIndex, episode.Index, episode.Title))
 					}
@@ -335,10 +329,10 @@ func (s *PlaybackService) wakeAppleTV(ctx context.Context, entityID string) erro
 	// Wait for device to wake up
 	logger.Debug("Waiting for Apple TV to wake up",
 		"apple_tv", entityID,
-		"wait_time", constants.AppleTVWakeTime)
+		"wait_time", s.wakeTime)
 
 	select {
-	case <-time.After(constants.AppleTVWakeTime):
+	case <-time.After(s.wakeTime):
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -353,16 +347,18 @@ func (s *PlaybackService) logPlayback(ctx context.Context, userID int64, tagID, 
 }
 
 // findNextEpisode finds the episode that comes after a given season/episode number.
-// Returns nil, nil if no more episodes exist (series complete).
-func (s *PlaybackService) findNextEpisode(ctx context.Context, client PlexClient, showRatingKey string, lastSeason, lastEpisode int) (*plex.MediaMetadata, error) {
+// Returns (episode, restarted, error). If all episodes have been watched,
+// returns S1E1 with restarted=true so the caller can clear watch history.
+func (s *PlaybackService) findNextEpisode(ctx context.Context, client PlexClient, showRatingKey string, lastSeason, lastEpisode int) (*plex.MediaMetadata, bool, error) {
 	// Get all seasons
 	seasons, err := client.GetChildren(ctx, showRatingKey)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get seasons: %w", err)
+		return nil, false, fmt.Errorf("failed to get seasons: %w", err)
 	}
 
 	// Separate regular seasons from specials, sort by index
 	var regularSeasons []plex.MediaMetadata
+	var firstEpisode *plex.MediaMetadata
 	for _, s := range seasons {
 		if s.Type == "season" && s.Index > 0 {
 			regularSeasons = append(regularSeasons, s)
@@ -371,11 +367,6 @@ func (s *PlaybackService) findNextEpisode(ctx context.Context, client PlexClient
 
 	// Find the next episode
 	for _, season := range regularSeasons {
-		// Skip seasons before the last watched
-		if season.Index < lastSeason {
-			continue
-		}
-
 		episodes, err := client.GetChildren(ctx, season.RatingKey)
 		if err != nil {
 			logger.Warn("Failed to get episodes for season", "season", season.Index, "error", err)
@@ -387,16 +378,24 @@ func (s *PlaybackService) findNextEpisode(ctx context.Context, client PlexClient
 				continue
 			}
 
-			// If same season, skip episodes up to and including the last watched
-			if season.Index == lastSeason && ep.Index <= lastEpisode {
+			// Track first episode for restart fallback
+			if firstEpisode == nil {
+				firstEpisode = &ep
+			}
+
+			// Skip episodes up to and including the last watched
+			if season.Index < lastSeason || (season.Index == lastSeason && ep.Index <= lastEpisode) {
 				continue
 			}
 
 			// Found the next episode
-			return &ep, nil
+			return &ep, false, nil
 		}
 	}
 
-	// No more episodes - series complete
-	return nil, nil
+	// No more episodes - series complete, return first episode with restart flag
+	if firstEpisode != nil {
+		return firstEpisode, true, nil
+	}
+	return nil, false, nil
 }
