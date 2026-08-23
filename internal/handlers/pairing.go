@@ -47,6 +47,9 @@ type PairingHandler struct {
 	upgrader        websocket.Upgrader
 	clients         map[*pairingClient]bool
 	clientsMu       sync.Mutex
+	recentTaps      map[string]time.Time // tagID → last tap timestamp
+	recentTapsMu    sync.Mutex
+	tapDebounce     time.Duration // debounce window for duplicate taps
 }
 
 // pairingClient represents a browser WebSocket client in pairing mode
@@ -80,6 +83,8 @@ func NewPairingHandler(
 		configPath:      configPath,
 		devMode:         devMode,
 		clients:         make(map[*pairingClient]bool),
+		recentTaps:      make(map[string]time.Time),
+		tapDebounce:     2 * time.Second,
 	}
 
 	// Configure WebSocket upgrader with origin checking
@@ -91,6 +96,9 @@ func NewPairingHandler(
 	if haClient != nil {
 		haClient.OnTagScanned(handler.handleTagScanned)
 	}
+
+	// Start cleanup goroutine for recent taps
+	go handler.cleanupRecentTaps()
 
 	return handler
 }
@@ -330,6 +338,18 @@ func (h *PairingHandler) handleTagScanned(tagID string) {
 
 // handleTagScannedInternal contains the actual tag scanning logic
 func (h *PairingHandler) handleTagScannedInternal(ctx context.Context, tagID string) {
+	// Check for duplicate tap within debounce window
+	h.recentTapsMu.Lock()
+	lastTap, exists := h.recentTaps[tagID]
+	if exists && time.Since(lastTap) < h.tapDebounce {
+		h.recentTapsMu.Unlock()
+		logger.Debug("Ignoring duplicate tap within debounce window",
+			"tag_id", tagID,
+			"time_since_last", time.Since(lastTap))
+		return
+	}
+	h.recentTaps[tagID] = time.Now()
+	h.recentTapsMu.Unlock()
 
 	h.clientsMu.Lock()
 	defer h.clientsMu.Unlock()
@@ -459,5 +479,23 @@ func (h *PairingHandler) unregisterClient(client *pairingClient) {
 		close(client.send)
 		middleware.DecrementWebSocketConnections()
 		logger.Info("WebSocket client disconnected", "user_id", client.userID)
+	}
+}
+
+// cleanupRecentTaps periodically removes old entries from the recent taps map
+func (h *PairingHandler) cleanupRecentTaps() {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		h.recentTapsMu.Lock()
+		now := time.Now()
+		for tagID, lastTap := range h.recentTaps {
+			// Remove entries older than 10 seconds
+			if now.Sub(lastTap) > 10*time.Second {
+				delete(h.recentTaps, tagID)
+			}
+		}
+		h.recentTapsMu.Unlock()
 	}
 }
