@@ -162,7 +162,7 @@ func (c *RestClient) PlayMedia(ctx context.Context, entityID, contentType, conte
 	req.Header.Set("Content-Type", "application/json")
 
 	if c.devMode {
-		logger.Debug("Calling play_media service", "url", url, "request_body", string(jsonData))
+		logger.Debug("Calling play_media service", "url", url, "request_body", logger.RedactTokens(string(jsonData)))
 	}
 
 	// Execute request
