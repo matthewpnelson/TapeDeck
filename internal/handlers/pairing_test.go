@@ -798,7 +798,12 @@ func TestPairingHandler_Playback_RestClientError(t *testing.T) {
 	mockHA := &mockHAClient{
 		tagCallbacks: []func(string){},
 	}
+	// "playing" takes the stop-then-play path rather than the 5s wake path, and a
+	// failing turn_on cuts the play-failure wake retry short - together that keeps
+	// the whole attempt inside the wait below instead of running for 10s.
 	mockRest := &mockHARestClient{
+		entityState:    "playing",
+		turnOnError:    fmt.Errorf("Apple TV unreachable"),
 		playMediaError: fmt.Errorf("HA service unavailable"),
 	}
 
@@ -810,8 +815,8 @@ func TestPairingHandler_Playback_RestClientError(t *testing.T) {
 	// Simulate tag scan
 	mockHA.simulateTagScan("test-tag-456")
 
-	// Wait for async processing
-	time.Sleep(50 * time.Millisecond)
+	// Wait for async processing (covers the 500ms post-stop settle)
+	time.Sleep(750 * time.Millisecond)
 
 	// Verify PlayMedia was called (even though it errored)
 	if len(mockRest.playMediaCalls) != 1 {

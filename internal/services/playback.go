@@ -234,7 +234,7 @@ func (s *PlaybackService) Play(ctx context.Context, req *PlaybackRequest) (*Play
 				req.PlexServerID,
 			)
 		}
-		logger.Info("Built playlist deep link with shuffle", "url", plexURL)
+		logger.Info("Built playlist deep link with shuffle", "url", logger.RedactTokens(plexURL))
 	} else {
 		// Regular library content (movie, show, episode, etc.)
 		// For shows, mediaID has been resolved to the next episode's ratingKey
@@ -252,7 +252,7 @@ func (s *PlaybackService) Play(ctx context.Context, req *PlaybackRequest) (*Play
 				req.PlexServerID,
 			)
 		}
-		logger.Info("Built library content deep link", "url", plexURL, "has_token", authToken != "")
+		logger.Info("Built library content deep link", "url", logger.RedactTokens(plexURL), "has_token", authToken != "")
 	}
 
 	// Check Apple TV state
@@ -300,10 +300,27 @@ func (s *PlaybackService) Play(ctx context.Context, req *PlaybackRequest) (*Play
 		}
 	}
 
-	// Play media
+	// Play media.
+	// A paused Plex app rejects the Open URL command when the Apple TV has gone to
+	// sleep or is still mid-launch from a previous deep link - HA surfaces that as a
+	// 500. Waking the device and sending it again is exactly what a second card tap
+	// does by hand, so do it here instead of making someone tap twice.
 	if err := s.haRest.PlayMedia(ctx, req.AppleTVEntity, "url", plexURL); err != nil {
-		result.Error = fmt.Errorf("failed to play media: %w", err)
-		return result, result.Error
+		logger.Warn("Play failed, waking Apple TV and retrying once",
+			"apple_tv", req.AppleTVEntity,
+			"state", state,
+			"error", err)
+
+		if wakeErr := s.wakeAppleTV(ctx, req.AppleTVEntity); wakeErr != nil {
+			result.Error = fmt.Errorf("failed to wake Apple TV after play failure: %w", wakeErr)
+			return result, result.Error
+		}
+		result.WokeDevice = true
+
+		if retryErr := s.haRest.PlayMedia(ctx, req.AppleTVEntity, "url", plexURL); retryErr != nil {
+			result.Error = fmt.Errorf("failed to play media after wake retry: %w", retryErr)
+			return result, result.Error
+		}
 	}
 
 	logger.Info("Playback started",

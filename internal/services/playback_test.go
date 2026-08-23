@@ -419,3 +419,82 @@ func TestWakeAppleTV_Timeout(t *testing.T) {
 		t.Errorf("Expected context.DeadlineExceeded error, got %v", err)
 	}
 }
+
+func TestPlay_PausedAppleTVRejectsOpenURL_WakesAndRetries(t *testing.T) {
+	db := &mockDB{}
+	var playCalls int
+	var wokeBeforeRetry bool
+	haRest := &mockHARestClient{entityState: "paused"}
+	haRest.turnOnFunc = func(_ context.Context, _ string) error {
+		wokeBeforeRetry = true
+		return nil
+	}
+	haRest.playMediaFunc = func(_ context.Context, _, _, _ string) error {
+		playCalls++
+		if playCalls == 1 {
+			// What HA returns when the Apple TV answers "Open URL failed"
+			return errors.New("unexpected status code: 500, body: 500 Internal Server Error")
+		}
+		return nil
+	}
+	service := newTestService(db, haRest, nil)
+
+	req := &PlaybackRequest{
+		TagID:         "tag-123",
+		UserID:        1,
+		MediaID:       "12345",
+		MediaTitle:    "Test Movie",
+		PlexServerID:  "server-123",
+		AppleTVEntity: "media_player.living_room",
+	}
+
+	result, err := service.Play(context.Background(), req)
+
+	if err != nil {
+		t.Fatalf("Expected retry to recover, got %v", err)
+	}
+	if !result.Success {
+		t.Errorf("Expected success=true after retry, got false")
+	}
+	if playCalls != 2 {
+		t.Errorf("Expected 2 play attempts, got %d", playCalls)
+	}
+	if !wokeBeforeRetry {
+		t.Errorf("Expected Apple TV to be woken before the retry")
+	}
+	if !result.WokeDevice {
+		t.Errorf("Expected woke_device=true after wake retry, got false")
+	}
+}
+
+func TestPlay_RetryAlsoFails_ReturnsError(t *testing.T) {
+	db := &mockDB{}
+	var playCalls int
+	haRest := &mockHARestClient{entityState: "paused"}
+	haRest.playMediaFunc = func(_ context.Context, _, _, _ string) error {
+		playCalls++
+		return errors.New("unexpected status code: 500")
+	}
+	service := newTestService(db, haRest, nil)
+
+	req := &PlaybackRequest{
+		TagID:         "tag-123",
+		UserID:        1,
+		MediaID:       "12345",
+		MediaTitle:    "Test Movie",
+		PlexServerID:  "server-123",
+		AppleTVEntity: "media_player.living_room",
+	}
+
+	result, err := service.Play(context.Background(), req)
+
+	if err == nil {
+		t.Fatal("Expected error when both attempts fail")
+	}
+	if result.Success {
+		t.Errorf("Expected success=false, got true")
+	}
+	if playCalls != 2 {
+		t.Errorf("Expected exactly 2 play attempts (no infinite retry), got %d", playCalls)
+	}
+}
