@@ -103,19 +103,19 @@ func (h *PlexWebhookHandler) HandleWebhook(w http.ResponseWriter, r *http.Reques
 		"title", payload.Metadata.Title,
 		"server", payload.Server.Title)
 
-	// Only process media.scrobble events (content was 90% watched)
-	if payload.Event != "media.scrobble" {
-		logger.Debug("Ignoring non-scrobble event", "event", payload.Event)
+	// Determine if we should record as watched
+	shouldRecord, reason := h.shouldRecordAsWatched(&payload)
+	if !shouldRecord {
+		logger.Debug("Not recording watch progress", "reason", reason)
 		w.WriteHeader(http.StatusOK)
 		return
 	}
 
-	// Only process TV episodes (not movies or music)
-	if payload.Metadata.Type != "episode" {
-		logger.Debug("Ignoring non-episode scrobble", "type", payload.Metadata.Type)
-		w.WriteHeader(http.StatusOK)
-		return
-	}
+	logger.Info("Recording watch progress",
+		"reason", reason,
+		"account", payload.Account.Title,
+		"show", payload.Metadata.GrandparentTitle,
+		"episode", fmt.Sprintf("S%02dE%02d", payload.Metadata.ParentIndex, payload.Metadata.Index))
 
 	// Extract episode info
 	showRatingKey := payload.Metadata.GrandparentRatingKey
@@ -162,4 +162,35 @@ func (h *PlexWebhookHandler) HandleWebhook(w http.ResponseWriter, r *http.Reques
 	}); err != nil {
 		reqLogger.Warn("Failed to encode response", "error", err)
 	}
+}
+
+// shouldRecordAsWatched determines if a webhook event should be recorded as watched
+func (h *PlexWebhookHandler) shouldRecordAsWatched(payload *PlexWebhookPayload) (bool, string) {
+	// Only process TV episodes (not movies or music)
+	if payload.Metadata.Type != "episode" {
+		return false, fmt.Sprintf("not an episode: %s", payload.Metadata.Type)
+	}
+
+	// Scrobble event (auto-fired at 90%)
+	if payload.Event == "media.scrobble" {
+		return true, "scrobble event"
+	}
+
+	// Stop event - calculate completion percentage
+	if payload.Event == "media.stop" {
+		if payload.Metadata.Duration == 0 {
+			return false, "zero duration"
+		}
+
+		percent := float64(payload.Metadata.ViewOffset) / float64(payload.Metadata.Duration)
+
+		// Use same 90% threshold as Plex scrobble
+		if percent >= 0.90 {
+			return true, fmt.Sprintf("stopped at %.1f%%", percent*100)
+		}
+		return false, fmt.Sprintf("stopped at %.1f%% (below 90%% threshold)", percent*100)
+	}
+
+	// Ignore other events
+	return false, fmt.Sprintf("ignoring event: %s", payload.Event)
 }
