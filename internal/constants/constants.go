@@ -17,6 +17,10 @@ const (
 	HAWebSocketHandshakeTimeout = 10 * time.Second
 	// HAWebSocketReconnectDelay is the delay before reconnecting to Home Assistant.
 	HAWebSocketReconnectDelay = 5 * time.Second
+
+	// HAWebSocketMaxReconnectDelay caps the backoff between reconnect attempts, so
+	// an overnight Home Assistant outage does not fill the log with retry warnings.
+	HAWebSocketMaxReconnectDelay = 1 * time.Minute
 	// HAWebSocketCloseTimeout is the timeout for sending close message to Home Assistant.
 	HAWebSocketCloseTimeout = 1 * time.Second
 

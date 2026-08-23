@@ -221,7 +221,8 @@ func main() {
 		// Initialize Home Assistant WebSocket client
 		haClient = ha.NewHAClient(runtimeCfg.HomeAssistant.URL, haToken)
 		if err := haClient.Connect(); err != nil {
-			logger.Warn("Failed to connect to Home Assistant", "error", err)
+			logger.Warn("Failed to connect to Home Assistant, retrying in background", "error", err)
+			haClient.RetryConnect()
 		}
 
 		// Initialize Home Assistant REST client

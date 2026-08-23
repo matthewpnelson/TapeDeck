@@ -161,19 +161,22 @@ func (c *HAClient) Connect() error {
 	logger.Info("Connected to Home Assistant WebSocket")
 
 	// Start message handler
-	go c.handleMessages()
+	go c.handleMessages(conn)
 
 	return nil
 }
 
 // handleMessages reads and processes messages from Home Assistant
-func (c *HAClient) handleMessages() {
+func (c *HAClient) handleMessages(conn *websocket.Conn) {
 	defer func() {
+		if err := conn.Close(); err != nil {
+			logger.Warn("Failed to close WebSocket", "error", err)
+		}
+		// Only clear the shared connection if it is still ours - a manual Reconnect
+		// may already have swapped in a newer one.
 		c.mu.Lock()
-		if c.conn != nil {
-			if err := c.conn.Close(); err != nil {
-				logger.Warn("Failed to close WebSocket", "error", err)
-			}
+		if c.conn == conn {
+			c.conn = nil
 		}
 		c.mu.Unlock()
 	}()
@@ -183,25 +186,85 @@ func (c *HAClient) handleMessages() {
 		case <-c.done:
 			return
 		default:
-			c.mu.Lock()
-			conn := c.conn
-			c.mu.Unlock()
+		}
 
-			if conn == nil {
-				return
+		var msg map[string]interface{}
+		if err := conn.ReadJSON(&msg); err != nil {
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+				logger.Warn("WebSocket error", "error", err)
 			}
+			break
+		}
 
-			var msg map[string]interface{}
-			if err := conn.ReadJSON(&msg); err != nil {
-				if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-					logger.Warn("WebSocket error", "error", err)
-				}
-				return
-			}
+		// Handle event messages
+		if msgType, ok := msg["type"].(string); ok && msgType == "event" {
+			c.handleEvent(msg)
+		}
+	}
 
-			// Handle event messages
-			if msgType, ok := msg["type"].(string); ok && msgType == "event" {
-				c.handleEvent(msg)
+	// The read loop only ends when the connection died. Home Assistant restarts
+	// often enough - updates, add-on installs, a reboot - that without this
+	// TapeDeck stays silently deaf to tag_scanned events until someone restarts it.
+	select {
+	case <-c.done:
+		return
+	default:
+		go c.retryConnect(conn)
+	}
+}
+
+// RetryConnect starts reconnect attempts in the background. Use it when the initial
+// Connect fails at startup, so a Home Assistant that is merely slow to boot does not
+// leave the WebSocket down until the next restart.
+func (c *HAClient) RetryConnect() {
+	go c.retryConnect(nil)
+}
+
+// retryConnect re-dials Home Assistant until it succeeds, the client is closed, or
+// another connection takes over. lost is the connection being replaced, or nil when
+// there was never one.
+func (c *HAClient) retryConnect(lost *websocket.Conn) {
+	delay := c.reconnectDelay
+	if delay <= 0 {
+		// Clients built as struct literals (tests) leave this zero; without a floor
+		// the loop below would spin.
+		delay = constants.HAWebSocketReconnectDelay
+	}
+
+	for attempt := 1; ; attempt++ {
+		select {
+		case <-c.done:
+			return
+		case <-time.After(delay):
+		}
+
+		// Take reconnectMu per attempt rather than for the whole loop, so a manual
+		// Reconnect waits at most one dial instead of the entire outage.
+		c.reconnectMu.Lock()
+		c.mu.Lock()
+		superseded := c.conn != nil && c.conn != lost
+		c.mu.Unlock()
+		if superseded {
+			c.reconnectMu.Unlock()
+			return
+		}
+		err := c.Connect()
+		c.reconnectMu.Unlock()
+
+		if err == nil {
+			logger.Info("Reconnected to Home Assistant WebSocket", "attempts", attempt)
+			return
+		}
+
+		logger.Warn("Home Assistant reconnect failed, retrying",
+			"attempt", attempt,
+			"retry_in", delay,
+			"error", err)
+
+		if delay < constants.HAWebSocketMaxReconnectDelay {
+			delay *= 2
+			if delay > constants.HAWebSocketMaxReconnectDelay {
+				delay = constants.HAWebSocketMaxReconnectDelay
 			}
 		}
 	}

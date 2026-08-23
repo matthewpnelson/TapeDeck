@@ -281,3 +281,69 @@ func TestReconnect_ClosesOldConnection(t *testing.T) {
 
 	client.Close()
 }
+
+func TestHandleMessages_ReconnectsAfterConnectionDrops(t *testing.T) {
+	server, connCount, mu := mockWSServer(t)
+	defer server.Close()
+
+	client := &HAClient{
+		url:            "ws" + strings.TrimPrefix(server.URL, "http"),
+		token:          "test-token",
+		done:           make(chan struct{}),
+		reconnectDelay: 20 * time.Millisecond,
+	}
+
+	if err := client.Connect(); err != nil {
+		t.Fatalf("Connect() failed: %v", err)
+	}
+	defer client.Close()
+
+	// mockWSServer hangs up after ~100ms - the client should dial again unprompted
+	// rather than sitting there deaf until someone restarts TapeDeck.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		n := *connCount
+		mu.Unlock()
+		if n >= 2 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	mu.Lock()
+	got := *connCount
+	mu.Unlock()
+	t.Fatalf("connections = %d, want >= 2 (client never reconnected after the drop)", got)
+}
+
+func TestHandleMessages_NoReconnectAfterClose(t *testing.T) {
+	server, connCount, mu := mockWSServer(t)
+	defer server.Close()
+
+	client := &HAClient{
+		url:            "ws" + strings.TrimPrefix(server.URL, "http"),
+		token:          "test-token",
+		done:           make(chan struct{}),
+		reconnectDelay: 20 * time.Millisecond,
+	}
+
+	if err := client.Connect(); err != nil {
+		t.Fatalf("Connect() failed: %v", err)
+	}
+	client.Close()
+
+	mu.Lock()
+	before := *connCount
+	mu.Unlock()
+
+	time.Sleep(400 * time.Millisecond)
+
+	mu.Lock()
+	after := *connCount
+	mu.Unlock()
+
+	if after != before {
+		t.Errorf("Reconnected %d time(s) after Close(); want 0", after-before)
+	}
+}
