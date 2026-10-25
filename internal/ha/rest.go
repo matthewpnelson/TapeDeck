@@ -49,6 +49,25 @@ type EntityState struct {
 
 // GetEntityState retrieves the current state of an entity
 func (c *RestClient) GetEntityState(ctx context.Context, entityID string) (string, error) {
+	entity, err := c.GetEntity(ctx, entityID)
+	if err != nil {
+		return "", err
+	}
+	return entity.State, nil
+}
+
+// GetEntityApp returns a media player's state and the app_id of its foreground app ("" when none)
+func (c *RestClient) GetEntityApp(ctx context.Context, entityID string) (string, string, error) {
+	entity, err := c.GetEntity(ctx, entityID)
+	if err != nil {
+		return "", "", err
+	}
+	appID, _ := entity.Attributes["app_id"].(string)
+	return entity.State, appID, nil
+}
+
+// GetEntity retrieves an entity's state and attributes
+func (c *RestClient) GetEntity(ctx context.Context, entityID string) (*EntityState, error) {
 	url := fmt.Sprintf("%s/api/states/%s", c.baseURL, entityID)
 
 	if c.devMode {
@@ -57,14 +76,14 @@ func (c *RestClient) GetEntityState(ctx context.Context, entityID string) (strin
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return "", fmt.Errorf("failed to create request: %w", err)
+		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
 	req.Header.Set("Authorization", "Bearer "+c.token)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("failed to make request: %w", err)
+		return nil, fmt.Errorf("failed to make request: %w", err)
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
@@ -74,19 +93,19 @@ func (c *RestClient) GetEntityState(ctx context.Context, entityID string) (strin
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("unexpected status code: %d, body: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("unexpected status code: %d, body: %s", resp.StatusCode, string(body))
 	}
 
 	var state EntityState
 	if err := json.NewDecoder(resp.Body).Decode(&state); err != nil {
-		return "", fmt.Errorf("failed to decode response: %w", err)
+		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
 	if c.devMode {
 		logger.Debug("Entity state retrieved", "state", state.State)
 	}
 
-	return state.State, nil
+	return &state, nil
 }
 
 // TurnOn calls the media_player.turn_on service

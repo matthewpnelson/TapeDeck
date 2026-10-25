@@ -20,8 +20,21 @@ type PlexClientFactory func(serverID string, userID int64, plexUserUUID string) 
 type PlexClient interface {
 	GetNextUnwatchedEpisode(ctx context.Context, showRatingKey string) (*plex.MediaMetadata, error)
 	GetChildren(ctx context.Context, ratingKey string) ([]plex.MediaMetadata, error)
+	GetMetadata(ctx context.Context, ratingKey string) (*plex.MediaMetadata, error)
 	GetAuthToken() string
 }
+
+const (
+	// PlayerInfuse sends Infuse deep links instead of plex:// links.
+	// The Plex tvOS app (2026.18+) opens on plex:// links but ignores the item in them.
+	PlayerInfuse = "infuse"
+
+	// PlayerPlexInfuseFallback sends the plex:// link first and sends the Infuse link only when
+	// Plex isn't playing within plexCheckTimeout. When Plex fixes deep links, taps open in Plex again.
+	PlayerPlexInfuseFallback = "plex-infuse-fallback"
+
+	plexAppID = "com.plexapp.plex"
+)
 
 // PlaybackService handles media playback orchestration
 type PlaybackService struct {
@@ -29,6 +42,11 @@ type PlaybackService struct {
 	haRest            HARestClient
 	plexClientFactory PlexClientFactory
 	wakeTime          time.Duration
+	plexCheckTimeout  time.Duration
+
+	// Player is the Apple TV app that plays cards: "" or "plex" for Plex,
+	// PlayerInfuse for Infuse, or PlayerPlexInfuseFallback
+	Player string
 }
 
 // DBClient defines the database operations needed for playback
@@ -42,6 +60,7 @@ type DBClient interface {
 // HARestClient defines the HA REST operations needed for playback
 type HARestClient interface {
 	GetEntityState(ctx context.Context, entityID string) (string, error)
+	GetEntityApp(ctx context.Context, entityID string) (state, appID string, err error)
 	TurnOn(ctx context.Context, entityID string) error
 	PlayMedia(ctx context.Context, entityID, contentType, contentID string) error
 	MediaStop(ctx context.Context, entityID string) error
@@ -76,6 +95,7 @@ func NewPlaybackService(database DBClient, haRest HARestClient, plexFactory Plex
 		haRest:            haRest,
 		plexClientFactory: plexFactory,
 		wakeTime:          constants.AppleTVWakeTime,
+		plexCheckTimeout:  constants.PlexDeepLinkTimeout,
 	}
 }
 
@@ -255,6 +275,17 @@ func (s *PlaybackService) Play(ctx context.Context, req *PlaybackRequest) (*Play
 		logger.Info("Built library content deep link", "url", logger.RedactTokens(plexURL), "has_token", authToken != "")
 	}
 
+	contentURL := plexURL
+	var fallbackURL string // sent only if Plex doesn't play contentURL
+	switch s.Player {
+	case PlayerInfuse:
+		contentURL = s.infuseOrPlex(ctx, adminClient, req.MediaType, mediaID, plexURL)
+	case PlayerPlexInfuseFallback:
+		if link := s.infuseOrPlex(ctx, adminClient, req.MediaType, mediaID, plexURL); link != plexURL {
+			fallbackURL = link
+		}
+	}
+
 	// Check Apple TV state
 	state, err := s.haRest.GetEntityState(ctx, req.AppleTVEntity)
 	if err != nil {
@@ -305,7 +336,7 @@ func (s *PlaybackService) Play(ctx context.Context, req *PlaybackRequest) (*Play
 	// sleep or is still mid-launch from a previous deep link - HA surfaces that as a
 	// 500. Waking the device and sending it again is exactly what a second card tap
 	// does by hand, so do it here instead of making someone tap twice.
-	if err := s.haRest.PlayMedia(ctx, req.AppleTVEntity, "url", plexURL); err != nil {
+	if err := s.haRest.PlayMedia(ctx, req.AppleTVEntity, "url", contentURL); err != nil {
 		logger.Warn("Play failed, waking Apple TV and retrying once",
 			"apple_tv", req.AppleTVEntity,
 			"state", state,
@@ -317,9 +348,22 @@ func (s *PlaybackService) Play(ctx context.Context, req *PlaybackRequest) (*Play
 		}
 		result.WokeDevice = true
 
-		if retryErr := s.haRest.PlayMedia(ctx, req.AppleTVEntity, "url", plexURL); retryErr != nil {
+		if retryErr := s.haRest.PlayMedia(ctx, req.AppleTVEntity, "url", contentURL); retryErr != nil {
 			result.Error = fmt.Errorf("failed to play media after wake retry: %w", retryErr)
 			return result, result.Error
+		}
+	}
+
+	if fallbackURL != "" {
+		if s.waitForPlex(ctx, req.AppleTVEntity) {
+			logger.Info("Plex played the deep link, Infuse fallback not needed", "apple_tv", req.AppleTVEntity)
+		} else {
+			logger.Warn("Plex didn't play the deep link, sending Infuse link",
+				"apple_tv", req.AppleTVEntity, "waited", s.plexCheckTimeout)
+			if err := s.haRest.PlayMedia(ctx, req.AppleTVEntity, "url", fallbackURL); err != nil {
+				result.Error = fmt.Errorf("failed to play Infuse fallback: %w", err)
+				return result, result.Error
+			}
 		}
 	}
 
@@ -335,6 +379,79 @@ func (s *PlaybackService) Play(ctx context.Context, req *PlaybackRequest) (*Play
 
 	result.Success = true
 	return result, nil
+}
+
+// waitForPlex reports whether the Apple TV plays in the Plex app before plexCheckTimeout ends.
+// It checks app_id as well as state, because an Infuse video that was stopped a moment ago
+// can still read "playing".
+func (s *PlaybackService) waitForPlex(ctx context.Context, entityID string) bool {
+	deadline := time.Now().Add(s.plexCheckTimeout)
+	for {
+		state, appID, err := s.haRest.GetEntityApp(ctx, entityID)
+		if err == nil && state == "playing" && appID == plexAppID {
+			return true
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return false
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(min(time.Second, remaining)):
+		}
+	}
+}
+
+// infuseOrPlex returns an Infuse link for a movie or episode, or plexURL when Infuse can't play the item.
+// Playlists stay on plex:// because Infuse has no playlist link, so they resume working if Plex fixes deep links.
+func (s *PlaybackService) infuseOrPlex(ctx context.Context, client PlexClient, mediaType, ratingKey, plexURL string) string {
+	if mediaType == "playlist" {
+		logger.Warn("Infuse has no playlist link, sending plex:// instead", "rating_key", ratingKey)
+		return plexURL
+	}
+	if client == nil {
+		logger.Warn("No Plex client for Infuse link lookup, sending plex:// instead", "rating_key", ratingKey)
+		return plexURL
+	}
+
+	link, err := infuseLink(ctx, client, ratingKey)
+	if err != nil {
+		logger.Warn("Could not build Infuse link, sending plex:// instead", "rating_key", ratingKey, "error", err)
+		return plexURL
+	}
+	logger.Info("Built Infuse deep link", "url", link)
+	return link
+}
+
+// infuseLink builds an Infuse deep link from the TMDB IDs in Plex.
+// Infuse matches its library by TMDB, and ?play starts playback without a button press.
+func infuseLink(ctx context.Context, client PlexClient, ratingKey string) (string, error) {
+	item, err := client.GetMetadata(ctx, ratingKey)
+	if err != nil {
+		return "", fmt.Errorf("fetch metadata: %w", err)
+	}
+
+	switch item.Type {
+	case "movie":
+		id := item.TMDBID()
+		if id == "" {
+			return "", fmt.Errorf("movie %s has no TMDB ID in Plex", ratingKey)
+		}
+		return fmt.Sprintf("infuse://movie/%s?play", id), nil
+	case "episode":
+		show, err := client.GetMetadata(ctx, item.GrandparentRatingKey)
+		if err != nil {
+			return "", fmt.Errorf("fetch show metadata: %w", err)
+		}
+		id := show.TMDBID()
+		if id == "" {
+			return "", fmt.Errorf("show %s has no TMDB ID in Plex", item.GrandparentRatingKey)
+		}
+		return fmt.Sprintf("infuse://series/%s-%d-%d?play", id, item.ParentIndex, item.Index), nil
+	default:
+		return "", fmt.Errorf("no Infuse link for %q items", item.Type)
+	}
 }
 
 // wakeAppleTV wakes an Apple TV and waits for it to be ready

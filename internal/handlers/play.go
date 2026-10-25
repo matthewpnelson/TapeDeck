@@ -26,6 +26,9 @@ type PlayHandler struct {
 	haToken       string
 	devMode       bool
 	newPlexClient PlexClientFactory
+
+	// Player is passed through to PlaybackService.Player
+	Player string
 }
 
 // NewPlayHandler creates a new play handler
@@ -162,6 +165,7 @@ func (h *PlayHandler) PlayByRatingKey(w http.ResponseWriter, r *http.Request) {
 		return nil
 	}
 	playbackService := services.NewPlaybackService(h.db, haClient, plexClientFactory)
+	playbackService.Player = h.Player
 
 	// Build playback request
 	playbackReq := &services.PlaybackRequest{

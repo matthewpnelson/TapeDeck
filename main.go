@@ -273,6 +273,9 @@ func main() {
 
 		// Initialize playback service
 		playbackService := services.NewPlaybackService(database, haRest, plexClientFactory)
+		playbackService.Player = runtimeCfg.Player
+		playHandler.Player = runtimeCfg.Player
+		logger.Info("Playback app", "player", runtimeCfg.Player)
 
 		// Initialize pairing handler
 		pairingHandler = handlers.NewPairingHandler(

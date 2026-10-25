@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/Chuntttttt/tapedeck/internal/constants"
 	"github.com/Chuntttttt/tapedeck/internal/logger"
@@ -300,15 +301,36 @@ type MediaMetadata struct {
 	Summary   string `json:"summary"`
 
 	// Episode/season fields
-	Index            int    `json:"index"`            // Episode number (for episodes)
-	ParentIndex      int    `json:"parentIndex"`      // Season number (for episodes)
-	ParentRatingKey  string `json:"parentRatingKey"`  // Season ratingKey (for episodes)
-	ParentTitle      string `json:"parentTitle"`      // Season title (for episodes)
-	GrandparentTitle string `json:"grandparentTitle"` // Show title (for episodes)
+	Index                int    `json:"index"`                // Episode number (for episodes)
+	ParentIndex          int    `json:"parentIndex"`          // Season number (for episodes)
+	ParentRatingKey      string `json:"parentRatingKey"`      // Season ratingKey (for episodes)
+	ParentTitle          string `json:"parentTitle"`          // Season title (for episodes)
+	GrandparentTitle     string `json:"grandparentTitle"`     // Show title (for episodes)
+	GrandparentRatingKey string `json:"grandparentRatingKey"` // Show ratingKey (for episodes)
 
 	// Watch status fields
 	ViewOffset int `json:"viewOffset"` // Resume position in milliseconds
 	ViewCount  int `json:"viewCount"`  // Number of times watched
+
+	// External IDs, only returned with includeGuids=1. PlexGUID must stay: encoding/json
+	// folds case, so without it the "guid" string would decode into the Guids array and fail.
+	PlexGUID string `json:"guid"`
+	Guids    []GUID `json:"Guid"`
+}
+
+// GUID is an external ID such as "tmdb://603" or "imdb://tt0133093"
+type GUID struct {
+	ID string `json:"id"`
+}
+
+// TMDBID returns the item's TMDB ID, or "" when Plex has no TMDB match
+func (m *MediaMetadata) TMDBID() string {
+	for _, g := range m.Guids {
+		if id, ok := strings.CutPrefix(g.ID, "tmdb://"); ok {
+			return id
+		}
+	}
+	return ""
 }
 
 // DVR represents a Plex Live TV DVR device
@@ -392,7 +414,7 @@ func (c *Client) GetMetadata(ctx context.Context, ratingKey string) (*MediaMetad
 		logger.Info("Using Live TV metadata endpoint", "url", reqURL, "rating_key", ratingKey, "encoded_key", encodedKey)
 	} else {
 		logger.Info("Using standard library metadata endpoint", "rating_key", ratingKey)
-		reqURL = fmt.Sprintf("%s/library/metadata/%s", c.serverURL, ratingKey)
+		reqURL = fmt.Sprintf("%s/library/metadata/%s?includeGuids=1", c.serverURL, ratingKey)
 	}
 	logger.Info("Constructed request URL", "url", reqURL)
 

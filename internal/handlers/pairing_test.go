@@ -643,6 +643,11 @@ func (m *mockHARestClient) MediaStop(_ context.Context, _ string) error {
 	return nil
 }
 
+func (m *mockHARestClient) GetEntityApp(ctx context.Context, entityID string) (string, string, error) {
+	state, err := m.GetEntityState(ctx, entityID)
+	return state, "", err
+}
+
 func TestPairingHandler_Playback_Success(t *testing.T) {
 	store := middleware.NewSessionStore([]byte("test-secret-key-32-chars-long!!"), false)
 

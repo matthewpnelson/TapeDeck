@@ -3,10 +3,12 @@ package services
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/Chuntttttt/tapedeck/internal/models"
+	"github.com/Chuntttttt/tapedeck/internal/plex"
 )
 
 // mockDB implements the DB methods needed for PlaybackService
@@ -58,6 +60,7 @@ type mockHARestClient struct {
 	getStateFunc  func(ctx context.Context, entityID string) (string, error)
 	turnOnFunc    func(ctx context.Context, entityID string) error
 	playMediaFunc func(ctx context.Context, entityID, contentType, contentID string) error
+	appFunc       func() (state, appID string)
 	getStateErr   error
 	turnOnErr     error
 	playMediaErr  error
@@ -92,9 +95,18 @@ func (m *mockHARestClient) MediaStop(_ context.Context, _ string) error {
 	return nil
 }
 
+func (m *mockHARestClient) GetEntityApp(_ context.Context, _ string) (string, string, error) {
+	if m.appFunc != nil {
+		state, appID := m.appFunc()
+		return state, appID, nil
+	}
+	return "idle", "", nil
+}
+
 func newTestService(db DBClient, haRest HARestClient, plexFactory PlexClientFactory) *PlaybackService {
 	svc := NewPlaybackService(db, haRest, plexFactory)
 	svc.wakeTime = 0
+	svc.plexCheckTimeout = 0
 	return svc
 }
 
@@ -496,5 +508,118 @@ func TestPlay_RetryAlsoFails_ReturnsError(t *testing.T) {
 	}
 	if playCalls != 2 {
 		t.Errorf("Expected exactly 2 play attempts (no infinite retry), got %d", playCalls)
+	}
+}
+
+// fakePlex serves metadata from a map, keyed by ratingKey.
+type fakePlex struct {
+	items map[string]*plex.MediaMetadata
+}
+
+func (f *fakePlex) GetNextUnwatchedEpisode(_ context.Context, _ string) (*plex.MediaMetadata, error) {
+	return nil, nil
+}
+
+func (f *fakePlex) GetChildren(_ context.Context, _ string) ([]plex.MediaMetadata, error) {
+	return nil, nil
+}
+
+func (f *fakePlex) GetAuthToken() string { return "token" }
+
+func (f *fakePlex) GetMetadata(_ context.Context, ratingKey string) (*plex.MediaMetadata, error) {
+	if m, ok := f.items[ratingKey]; ok {
+		return m, nil
+	}
+	return nil, errors.New("not found")
+}
+
+func tmdb(id string) []plex.GUID { return []plex.GUID{{ID: "tmdb://" + id}} }
+
+func TestPlay_InfusePlayer(t *testing.T) {
+	library := &fakePlex{items: map[string]*plex.MediaMetadata{
+		"100":   {Type: "movie", Guids: tmdb("603")},
+		"14948": {Type: "show", Guids: tmdb("226745")},
+		"15468": {Type: "episode", GrandparentRatingKey: "14948", ParentIndex: 2, Index: 1},
+		"200":   {Type: "movie"}, // no TMDB match in Plex
+	}}
+
+	tests := []struct {
+		name      string
+		mediaType string
+		mediaID   string
+		want      string
+	}{
+		{"movie", "movie", "100", "infuse://movie/603?play"},
+		{"episode", "episode", "15468", "infuse://series/226745-2-1?play"},
+		{"movie without tmdb falls back to plex", "movie", "200", "plex://play/?metadataKey=/library/metadata/200&server=srv&X-Plex-Token=token"},
+		{"playlist stays on plex", "playlist", "42", "plex://play/?metadataKey=/playlists/42&server=srv&shuffle=1&X-Plex-Token=token"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var sent string
+			haRest := &mockHARestClient{
+				entityState: "on",
+				playMediaFunc: func(_ context.Context, _, _ string, contentID string) error {
+					sent = contentID
+					return nil
+				},
+			}
+			svc := newTestService(&mockDB{}, haRest, func(string, int64, string) PlexClient { return library })
+			svc.Player = PlayerInfuse
+
+			_, err := svc.Play(context.Background(), &PlaybackRequest{
+				MediaType: tt.mediaType, MediaID: tt.mediaID, PlexServerID: "srv", AppleTVEntity: "media_player.tv",
+			})
+			if err != nil {
+				t.Fatalf("Play() error = %v", err)
+			}
+			if sent != tt.want {
+				t.Errorf("sent %q, want %q", sent, tt.want)
+			}
+		})
+	}
+}
+
+func TestPlay_PlexInfuseFallback(t *testing.T) {
+	library := &fakePlex{items: map[string]*plex.MediaMetadata{
+		"100": {Type: "movie", Guids: tmdb("603")},
+	}}
+	plexLink := "plex://play/?metadataKey=/library/metadata/100&server=srv&X-Plex-Token=token"
+
+	tests := []struct {
+		name         string
+		state, appID string
+		want         []string
+	}{
+		{"plex plays the link", "playing", "com.plexapp.plex", []string{plexLink}},
+		{"plex ignores the link", "paused", "com.plexapp.plex", []string{plexLink, "infuse://movie/603?play"}},
+		{"another app is still playing", "playing", "com.firecore.infuse", []string{plexLink, "infuse://movie/603?play"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var sent []string
+			haRest := &mockHARestClient{
+				entityState: "on",
+				playMediaFunc: func(_ context.Context, _, _ string, contentID string) error {
+					sent = append(sent, contentID)
+					return nil
+				},
+				appFunc: func() (string, string) { return tt.state, tt.appID },
+			}
+			svc := newTestService(&mockDB{}, haRest, func(string, int64, string) PlexClient { return library })
+			svc.Player = PlayerPlexInfuseFallback
+
+			_, err := svc.Play(context.Background(), &PlaybackRequest{
+				MediaType: "movie", MediaID: "100", PlexServerID: "srv", AppleTVEntity: "media_player.tv",
+			})
+			if err != nil {
+				t.Fatalf("Play() error = %v", err)
+			}
+			if strings.Join(sent, " ") != strings.Join(tt.want, " ") {
+				t.Errorf("sent %q, want %q", sent, tt.want)
+			}
+		})
 	}
 }

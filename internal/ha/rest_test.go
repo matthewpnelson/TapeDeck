@@ -275,3 +275,21 @@ func TestPlayMedia_MultipleContentTypes(t *testing.T) {
 		})
 	}
 }
+
+func TestGetEntityApp(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/states/media_player.tv" {
+			t.Errorf("path = %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"state":"playing","attributes":{"app_id":"com.plexapp.plex","app_name":"Plex"}}`))
+	}))
+	defer server.Close()
+
+	state, appID, err := NewRestClient(server.URL, "token", false).GetEntityApp(context.Background(), "media_player.tv")
+	if err != nil {
+		t.Fatalf("GetEntityApp() error = %v", err)
+	}
+	if state != "playing" || appID != "com.plexapp.plex" {
+		t.Errorf("got (%q, %q), want (playing, com.plexapp.plex)", state, appID)
+	}
+}

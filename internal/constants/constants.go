@@ -27,6 +27,12 @@ const (
 	// AppleTVWakeTime is the wait time for Apple TV to wake up after power on.
 	AppleTVWakeTime = 5 * time.Second
 
+	// PlexDeepLinkTimeout is how long plex-infuse-fallback waits for Plex to start playing a
+	// plex:// link before it sends the Infuse link. This is a guess, because no working Plex
+	// launch has been timed since the tvOS 2026.18 app shipped. Raise it if Infuse takes over
+	// from a Plex launch that would have succeeded.
+	PlexDeepLinkTimeout = 15 * time.Second
+
 	// SessionMaxAge is the maximum age of session cookies (10 years = effectively forever).
 	// For self-hosted single-user apps, forcing re-authentication is unnecessary.
 	SessionMaxAge = 10 * 365 * 24 * time.Hour

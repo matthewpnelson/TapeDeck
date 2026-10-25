@@ -13,6 +13,10 @@ type RuntimeConfig struct {
 	PlexServers   []PlexServer `yaml:"plex_servers"`
 	HomeAssistant HAConfig     `yaml:"home_assistant"`
 	AppleTVs      []AppleTV    `yaml:"apple_tvs"`
+	// Player is the Apple TV app that plays cards: "plex" (default), "infuse", or
+	// "plex-infuse-fallback" (try Plex first, send Infuse if Plex isn't playing).
+	// No UI yet, so set it by hand in config.yml.
+	Player string `yaml:"player,omitempty"`
 }
 
 // PlexServer represents a Plex Media Server configuration

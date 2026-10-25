@@ -367,3 +367,28 @@ func TestGetMetadata(t *testing.T) {
 		}
 	})
 }
+
+// Plex returns both "guid" (a string) and "Guid" (an array) when includeGuids=1 is set.
+// encoding/json folds case, so this guards against the string landing in the array field.
+func TestMediaMetadata_TMDBID(t *testing.T) {
+	body := `{"type":"episode","guid":"plex://episode/abc","Guid":[{"id":"imdb://tt1"},{"id":"tmdb://7291339"}],"grandparentRatingKey":"14948","parentIndex":2,"index":1}`
+
+	var m MediaMetadata
+	if err := json.Unmarshal([]byte(body), &m); err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	if got := m.TMDBID(); got != "7291339" {
+		t.Errorf("TMDBID() = %q, want 7291339", got)
+	}
+	if m.GrandparentRatingKey != "14948" {
+		t.Errorf("GrandparentRatingKey = %q, want 14948", m.GrandparentRatingKey)
+	}
+
+	var bare MediaMetadata
+	if err := json.Unmarshal([]byte(`{"type":"show","guid":"plex://show/x"}`), &bare); err != nil {
+		t.Fatalf("decode without Guid array failed: %v", err)
+	}
+	if got := bare.TMDBID(); got != "" {
+		t.Errorf("TMDBID() = %q, want empty", got)
+	}
+}
