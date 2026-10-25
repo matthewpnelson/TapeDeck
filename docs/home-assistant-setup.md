@@ -117,23 +117,43 @@ If no one is in pairing mode:
 5. Home Assistant sends command to Apple TV
 6. Apple TV launches Plex app and starts playing media
 
-## Plex Deep Links
+## Deep Links
 
-TapeDeck uses Plex deep link URLs to tell the Apple TV which media to play.
+TapeDeck sends a deep link URL to tell the Apple TV which media to play. The `player` key in `config.yml` selects the app. The setup wizard doesn't write this key, so set it by hand.
 
-**Format**:
+| `player` | What a tap sends |
+|---|---|
+| `plex` (default) | A `plex://` link only |
+| `infuse` | An Infuse link. Playlists and shows without a next episode use `plex://` |
+| `plex-infuse-fallback` | A `plex://` link. If Plex isn't playing 5s later, an Infuse link |
+
+The Plex tvOS app 2026.18 and later opens on `plex://` links but ignores the item in them. See [Known Limitations](known-limitations.md). Use `plex-infuse-fallback` until Plex fixes this. When taps open in Plex again, Plex is fixed, and you can cancel Infuse.
+
+### Plex link
+
 ```
 plex://play/?metadataKey=/library/metadata/{ratingKey}&server={serverID}
 ```
 
-**Example**:
+- `metadataKey`: the Plex rating key for the item. For a show, TapeDeck sends the next episode.
+- `server`: your Plex server ID
+
+### Infuse link
+
 ```
-plex://play/?metadataKey=/library/metadata/12345&server=3bca134a11ac79d97e21e787e1d3e6e4e4be3643
+infuse://movie/{tmdbID}?play
+infuse://series/{tmdbID}-{season}-{episode}?play
 ```
 
-**Parameters**:
-- `metadataKey`: The Plex rating key for the media item (stored in card mappings)
-- `server`: Your Plex server ID (from `PLEX_SERVER_ID` in `.env`)
+TapeDeck reads the TMDB ID from the item's `tmdb://` Guid in Plex. `?play` starts playback without a button press.
+
+Infuse setup:
+
+1. Add your Plex server as a share in Infuse, signed in as the Plex user the cards play as.
+2. Turn on library mode for the share. Without it, Infuse only knows items in Continue Watching and Recently Added, and other links open a "Search" page.
+3. Infuse Pro is necessary for Dolby audio such as E-AC3.
+
+`plex-infuse-fallback` decides that Plex works when Home Assistant reports `state: playing` and `app_id: com.plexapp.plex`. `PlexDeepLinkTimeout` in `internal/constants/constants.go` sets the 5s wait. Increase it if Infuse takes over from a Plex launch that would succeed.
 
 ## Home Assistant Service Call
 
@@ -197,10 +217,14 @@ Content-Type: application/json
 - Update `APPLE_TV_ENTITY` in `.env` with correct entity ID
 
 ### Plex Deep Link Not Working
+- Plex for tvOS 2026.18 and later ignores `plex://` links. Set `player: plex-infuse-fallback` in `config.yml`.
 - Verify Plex server ID is correct (`PLEX_SERVER_ID`)
 - Test URL format: `plex://play/?metadataKey=/library/metadata/{ratingKey}&server={serverID}`
 - Check Plex app is signed in on Apple TV
-- Try opening the deep link manually in Safari on iOS to verify format
+
+### Infuse Opens a "Search" Page
+- Infuse doesn't have the item in its library. Turn on library mode for the Plex share, and let the import finish.
+- Check the TapeDeck log line `Built Infuse deep link`. Compare its TMDB ID with the item's ID on themoviedb.org.
 
 ## Configuration Summary
 

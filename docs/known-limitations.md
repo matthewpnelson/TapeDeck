@@ -1,5 +1,27 @@
 # Known Limitations
 
+## Plex tvOS App Ignores Deep Links (2026.18 and Later)
+
+**Issue**: A tap opens the Plex app on the Apple TV, but the media doesn't play.
+
+**Why**: Plex shipped a redesigned tvOS app in 2026.18.0 on 16 Sep 2026. It accepts the `plex://play/` link and comes to the foreground, but it never requests the item from the Plex server. It shows its last screen, Home, or the "Who's Watching?" profile picker. Home Assistant returns 200, so TapeDeck logs `Playback started` for a tap that does nothing.
+
+Other findings from 25 Oct 2026:
+
+- 2026.19.0, 2026.19.1 and 2026.20.0 have no deep link fix in their release notes.
+- The app isn't a Plex remote-control player. It isn't listed with `provides=player` on plex.tv, and it doesn't answer on port 32500. The Home Assistant Plex integration can't control it.
+- The app has no setting that affects this.
+
+**Workaround**: Set `player: plex-infuse-fallback` in `config.yml`. See [Deep Links](home-assistant-setup.md#deep-links). Taps play in Infuse until Plex fixes deep links, and then they play in Plex again.
+
+**Limits of the workaround**:
+
+- Playlist cards have no Infuse link, so they still don't play.
+- Infuse plays as one Plex user, the one signed in to its Plex share. A card's Plex user only affects which next episode TapeDeck picks.
+- While Plex ignores links, each tap waits about 10s before Infuse starts: 5s to wake the Apple TV, then 5s for Plex.
+
+**Last Updated**: October 2026
+
 ## Live TV / DVR Channels Not Supported on Apple TV
 
 **Issue**: NFC cards cannot be mapped to Live TV channels when using Apple TV as the playback device.
@@ -16,6 +38,12 @@
 - ✗ Plex preplay/details screen format
 - ✗ Direct Tunarr HLS stream URLs
 - ✗ IPTV app deep linking
+- ✗ Tunarr streams through Infuse `infuse://x-callback-url/play?url=` (October 2026). Each Tunarr mode failed:
+  - HLS, HLS Alt, HLS Direct and HLS Direct v2: "An error occurred loading this content"
+  - MPEG-TS: "Server does not report the size of the file"
+  - Infuse ignores a URL that ends in `.m3u8`
+  - The segments are H.264 and AAC, so the stream format isn't the cause
+- ✗ Plex Live TV in Infuse. Infuse doesn't show Plex Live TV.
 
 **Workarounds**:
 
@@ -43,4 +71,4 @@ Theoretically possible to use `remote.send_command` to navigate Plex's UI with b
 
 **Status**: This is a platform limitation, not a TapeDeck bug. Apple TV's restrictive app ecosystem prevents the automation of Live TV playback via Home Assistant.
 
-**Last Updated**: December 2024
+**Last Updated**: October 2026
