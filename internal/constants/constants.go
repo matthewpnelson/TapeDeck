@@ -28,10 +28,10 @@ const (
 	AppleTVWakeTime = 5 * time.Second
 
 	// PlexDeepLinkTimeout is how long plex-infuse-fallback waits for Plex to start playing a
-	// plex:// link before it sends the Infuse link. This is a guess, because no working Plex
-	// launch has been timed since the tvOS 2026.18 app shipped. Raise it if Infuse takes over
-	// from a Plex launch that would have succeeded.
-	PlexDeepLinkTimeout = 15 * time.Second
+	// plex:// link before it sends the Infuse link. It starts after the wake wait, and every
+	// tap pays it while Plex ignores deep links, so it's kept short. Raise it if Infuse takes
+	// over from a Plex launch that would have succeeded.
+	PlexDeepLinkTimeout = 5 * time.Second
 
 	// SessionMaxAge is the maximum age of session cookies (10 years = effectively forever).
 	// For self-hosted single-user apps, forcing re-authentication is unnecessary.
